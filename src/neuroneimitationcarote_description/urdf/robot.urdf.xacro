@@ -1,0 +1,253 @@
+<?xml version="1.0"?>
+<robot name="neuroneimitationcarote" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ================================================================
+       NeuroneImitationCarote — URDF/Xacro
+       Bras 5 axes + pince
+  ================================================================ -->
+
+  <material name="dark_grey">
+    <color rgba="0.25 0.25 0.25 1.0"/>
+  </material>
+  <material name="orange">
+    <color rgba="0.9 0.45 0.0 1.0"/>
+  </material>
+  <material name="blue">
+    <color rgba="0.1 0.4 0.8 1.0"/>
+  </material>
+
+<!-- Dummy world link requis par KDL -->
+<link name="world"/>
+<joint name="world_to_base" type="fixed">
+  <parent link="world"/>
+  <child  link="base_link"/>
+  <origin xyz="0 0 0" rpy="0 0 0"/>
+</joint>
+
+  <!-- BASE_LINK -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.01" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.05" length="0.02"/></geometry>
+      <material name="blue"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.01" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.05" length="0.02"/></geometry>
+    </collision>
+  </link>
+
+  <!-- JOINT 1 -->
+  <joint name="joint_1" type="revolute">
+    <parent link="base_link"/>
+    <child  link="link_1"/>
+    <origin xyz="0 0 0.02" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14159" upper="3.14159" effort="10.0" velocity="1.0"/>
+    <dynamics damping="0.5" friction="0.1" acceleration="1.0"/>
+  </joint>
+
+  <!-- LINK 1 -->
+  <link name="link_1">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://neuroneimitationcarote_description/meshes/visual/section1_maillage.stl"
+              scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="orange"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.082" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.120" length="0.16"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.024 0 0.19" rpy="1.5707 0 0"/>
+      <geometry><cylinder radius="0.10" length="0.28"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.02 0 0.140" rpy="0 0 0"/>
+      <geometry><box size="0.120 0.600 0.17"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="1.5"/>
+      <origin xyz="0.013 0 0.129" rpy="0 0 0"/>
+      <inertia ixx="0.010" ixy="0" ixz="0" iyy="0.010" iyz="0" izz="0.005"/>
+    </inertial>
+  </link>
+
+  <!-- JOINT 2 -->
+  <joint name="joint_2" type="revolute">
+    <parent link="link_1"/>
+    <child  link="link_2"/>
+    <origin xyz="0.024031 0 0.202992" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.0" upper="1.2" effort="20.0" velocity="1.0"/>
+    <dynamics damping="0.5" friction="0.1" acceleration="1.0"/>
+  </joint>
+
+  <!-- LINK 2 -->
+  <link name="link_2">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://neuroneimitationcarote_description/meshes/visual/section2_maillage.stl"
+              scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="orange"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.017 0 0.22" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.090" length="0.31"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="-0.015 0 0.45" rpy="1.5707 0 0"/>
+      <geometry><cylinder radius="0.098" length="0.18"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="1.0"/>
+      <origin xyz="-0.010 0 0.205" rpy="0 0 0"/>
+      <inertia ixx="0.020" ixy="0" ixz="0" iyy="0.020" iyz="0" izz="0.002"/>
+    </inertial>
+  </link>
+
+  <!-- JOINT 3 -->
+  <joint name="joint_3" type="revolute">
+    <parent link="link_2"/>
+    <child  link="link_3"/>
+    <origin xyz="-0.015224 0 0.441653" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-3.0" upper="0.65" effort="15.0" velocity="1.0"/>
+    <dynamics damping="0.5" friction="0.1" acceleration="1.0"/>
+  </joint>
+
+  <!-- LINK 3 — pas de collision intentionnellement -->
+  <link name="link_3">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://neuroneimitationcarote_description/meshes/visual/section3_maillage.stl"
+              scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="orange"/>
+    </visual>
+    <collision>
+      <origin xyz="0.08 0 0.03" rpy="0 1.5708 0"/>
+      <geometry><cylinder radius="0.058" length="0.080"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.5"/>
+      <origin xyz="0.028 0 0.014" rpy="0 0 0"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.002" iyz="0" izz="0.002"/>
+    </inertial>
+  </link>
+
+  <!-- JOINT 4 -->
+  <joint name="joint_4" type="revolute">
+    <parent link="link_3"/>
+    <child  link="link_4"/>
+    <origin xyz="0.119473 0 0.029716" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-3.1416" upper="3.1416" effort="5.0" velocity="2.0"/>
+    <dynamics damping="0.2" friction="0.05" acceleration="2.0"/>
+  </joint>
+
+  <!-- LINK 4 -->
+  <link name="link_4">
+    <visual>
+      <origin xyz="-3.94046 0.0 0.0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://neuroneimitationcarote_description/meshes/visual/section4_maillage.stl"
+              scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="orange"/>
+    </visual>
+    <collision>
+      <origin xyz="0.14 0 0" rpy="0 1.5708 0"/>
+      <geometry><cylinder radius="0.058" length="0.290"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.4"/>
+      <origin xyz="0.178 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.0003" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.004"/>
+    </inertial>
+  </link>
+
+  <!-- JOINT 5 -->
+  <joint name="joint_5" type="revolute">
+    <parent link="link_4"/>
+    <child  link="link_5"/>
+    <origin xyz="0.321516 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.6" upper="1.6" effort="5.0" velocity="2.0"/>
+    <dynamics damping="0.2" friction="0.05" acceleration="2.0"/>
+  </joint>
+
+  <!-- LINK 5 -->
+  <link name="link_5">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 3.14 0"/>
+      <geometry>
+        <mesh filename="package://neuroneimitationcarote_description/meshes/visual/section5_maillage.stl"
+              scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="orange"/>
+    </visual>
+    <collision>
+      <origin xyz="0.05 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.023 0.22 0.04"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.04 0 0" rpy="0 1.5708 0"/>
+      <geometry><cylinder radius="0.045" length="0.095"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="-0.005 0 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.038" length="0.098"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.2"/>
+      <origin xyz="-0.048 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <!-- PINCE — boîte fixe placeholder -->
+  <joint name="joint_gripper" type="fixed">
+    <parent link="link_5"/>
+    <child  link="link_gripper"/>
+    <origin xyz="0.06 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="link_gripper">
+    <visual>
+      <origin xyz="0.05 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.10 0.08 0.04"/>
+      </geometry>
+      <material name="dark_grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0.05 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.10 0.08 0.04"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.15"/>
+      <origin xyz="0.05 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0"
+               iyy="0.0001" iyz="0"
+               izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <!-- TCP fixe pour MoveIt -->
+  <joint name="joint_tcp" type="fixed">
+    <parent link="link_gripper"/>
+    <child  link="tcp"/>
+    <origin xyz="0.10 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="tcp"/>
+
+</robot>

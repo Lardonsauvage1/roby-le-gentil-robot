@@ -1,0 +1,10 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: neuroneimitationcarote_description
+    relative_path: urdf/robot.urdf.xacro
+  srdf:
+    relative_path: config/neuroneimitationcarote.srdf
+  package_settings:
+    author_name: Sam
+    author_email: smurawka@outlook.fr
+    generated_timestamp: 1774049099
