@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<!--
+  Wrapper URDF for motor 1 hardware test.
+  Combines robot URDF + motor1_only ros2_control config.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="neuroneimitationcarote">
+    <xacro:arg name="initial_positions_file" default="$(find roby_hardware)/config/initial_positions.yaml" />
+
+    <!-- Import robot URDF -->
+    <xacro:include filename="$(find neuroneimitationcarote_description)/urdf/robot.urdf.xacro" />
+
+    <!-- Import steppers ros2_control config (joints 1-3 real, 4-5 mock) -->
+    <xacro:include filename="$(find roby_hardware)/config/roby_hardware_steppers_only.ros2_control.xacro" />
+
+    <xacro:roby_hardware_ros2_control name="RobySystem" initial_positions_file="$(arg initial_positions_file)" use_mock="false"/>
+</robot>

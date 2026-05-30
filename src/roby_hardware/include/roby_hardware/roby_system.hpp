@@ -1,0 +1,94 @@
+#ifndef ROBY_HARDWARE__ROBY_SYSTEM_HPP_
+#define ROBY_HARDWARE__ROBY_SYSTEM_HPP_
+
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "hardware_interface/system_interface.hpp"
+#include "hardware_interface/handle.hpp"
+#include "hardware_interface/hardware_info.hpp"
+#include "hardware_interface/types/hardware_interface_return_values.hpp"
+#include "rclcpp/macros.hpp"
+#include "rclcpp_lifecycle/state.hpp"
+
+#include "roby_hardware/stepper_driver.hpp"
+#include "roby_hardware/servo_driver.hpp"
+#include "roby_hardware/safety_monitor.hpp"
+
+namespace roby_hardware
+{
+
+enum class JointType
+{
+  STEPPER,
+  SERVO,
+  MOCK
+};
+
+struct JointInfo
+{
+  std::string name;
+  JointType type = JointType::MOCK;
+  double position = 0.0;
+  double velocity = 0.0;
+  double command = 0.0;
+  double prev_position = 0.0;
+};
+
+class RobySystem : public hardware_interface::SystemInterface
+{
+public:
+  RCLCPP_SHARED_PTR_DEFINITIONS(RobySystem)
+
+  hardware_interface::CallbackReturn on_init(
+    const hardware_interface::HardwareInfo & info) override;
+
+  hardware_interface::CallbackReturn on_configure(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  hardware_interface::CallbackReturn on_activate(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  hardware_interface::CallbackReturn on_deactivate(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
+  std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
+
+  hardware_interface::return_type read(
+    const rclcpp::Time & time, const rclcpp::Duration & period) override;
+
+  hardware_interface::return_type write(
+    const rclcpp::Time & time, const rclcpp::Duration & period) override;
+
+private:
+  /// Parse a hardware parameter, returning default if not found.
+  std::string get_param(const std::string & name, const std::string & default_val = "") const;
+  int get_param_int(const std::string & name, int default_val = 0) const;
+  double get_param_double(const std::string & name, double default_val = 0.0) const;
+  bool get_param_bool(const std::string & name, bool default_val = false) const;
+
+  /// Apply coupling compensation for axes 2/3.
+  double compensate_coupling(double joint3_cmd_rad, double joint2_pos_rad) const;
+
+  std::vector<JointInfo> joints_;
+  std::vector<std::unique_ptr<StepperDriver>> steppers_;
+  std::vector<std::unique_ptr<ServoDriver>> servos_;
+  SafetyMonitor safety_;
+
+  // Coupling parameters
+  bool coupling_enabled_ = false;
+  double coupling_ratio_m2_ = 0.0;  // RATIO_AXE_3_M2
+  double coupling_ratio_m3_ = 0.0;  // RATIO_AXE_3_M3
+
+  // Map joint index to stepper/servo index
+  std::vector<int> stepper_index_;  // -1 if not a stepper
+  std::vector<int> servo_index_;    // -1 if not a servo
+
+  int cycles_since_command_ = 0;
+};
+
+}  // namespace roby_hardware
+
+#endif  // ROBY_HARDWARE__ROBY_SYSTEM_HPP_

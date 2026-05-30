@@ -1,0 +1,9 @@
+<library path="roby_hardware">
+  <class name="roby_hardware/RobySystem"
+         type="roby_hardware::RobySystem"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      Hardware interface for Roby 5-DOF robot arm (steppers via GPIO + servos via PCA9685 I2C on Raspberry Pi 5)
+    </description>
+  </class>
+</library>
