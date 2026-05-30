@@ -1,0 +1,22 @@
+<CycloneDDS>
+  <Domain>
+    <General>
+      <Interfaces>
+        <NetworkInterface autodetermine="true"/>
+      </Interfaces>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <Peers>
+        <Peer address="localhost"/>
+        <Peer address="192.168.1.95"/>
+        <Peer address="192.168.1.96"/>
+        <Peer address="192.168.1.28"/>
+      </Peers>
+      <MaxAutoParticipantIndex>120</MaxAutoParticipantIndex>
+    </Discovery>
+    <SharedMemory>
+      <Enable>false</Enable>
+    </SharedMemory>
+  </Domain>
+</CycloneDDS>
