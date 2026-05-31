@@ -263,9 +263,12 @@ void EncoderDriver::update_tracker(int slave_id, std::optional<double> raw_deg)
     st.unwrapped_deg = wrap_to_180(raw - raw_init);
   } else {
     double diff = wrap_to_180(raw - st.last_raw_deg);
-    // Rejet d'outliers : un saut > max_step_deg ne peut pas etre physique
-    // (cinematique max << 1000 deg/s a 50 Hz cycle = 20 deg/cycle).
-    if (std::abs(diff) > config_.max_step_deg) {
+    // Rejet d'outliers AVEC porte de sortie : un saut > max_step_deg est rejete
+    // (glitch pulseIn), SAUF apres max_consec_rejects rejets consecutifs ou on
+    // re-synchronise (le capteur a vraiment bouge : mouvement rapide). Sans la
+    // porte, le filtre se bloque en mouvement rapide (lock-up 2026-05-31).
+    if (!accept_with_escape(diff, config_.max_step_deg,
+                            st.consecutive_rejects, config_.max_consec_rejects)) {
       st.outliers_count += 1;
       return;  // garde last_raw et unwrapped intacts
     }

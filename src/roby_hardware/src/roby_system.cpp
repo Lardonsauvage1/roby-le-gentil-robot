@@ -143,6 +143,14 @@ hardware_interface::CallbackReturn RobySystem::on_init(
       stepper_index_[i] = static_cast<int>(steppers_.size());
       steppers_.push_back(std::move(stepper));
 
+      // Gains PID closed-loop encodeur (feedback). Defaut 0 => open-loop pur
+      // (comportement identique a avant). Voir pid.hpp / BUG-005.
+      joints_[i].pid.kp = get_param_double(joint.name + "_pid_kp", 0.0);
+      joints_[i].pid.ki = get_param_double(joint.name + "_pid_ki", 0.0);
+      joints_[i].pid.kd = get_param_double(joint.name + "_pid_kd", 0.0);
+      joints_[i].pid.i_clamp = get_param_double(joint.name + "_pid_i_clamp", 0.0);
+      joints_[i].pid.deadband = get_param_double(joint.name + "_pid_deadband", 0.0);
+
     } else if (type_str == "servo") {
       joints_[i].type = JointType::SERVO;
 
@@ -275,6 +283,25 @@ hardware_interface::CallbackReturn RobySystem::on_init(
     joints_.size(), steppers_.size(), servos_.size(),
     encoder_enabled_ ? "ENABLED" : "disabled");
 
+  // Recap des joints en closed-loop (gains != 0). Si aucun => open-loop pur.
+  for (size_t i = 0; i < joints_.size(); ++i) {
+    if (joints_[i].pid.enabled()) {
+      RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
+        "%s closed-loop PID: kp=%.4f ki=%.4f kd=%.4f i_clamp=%.4f deadband=%.4f rad",
+        joints_[i].name.c_str(), joints_[i].pid.kp, joints_[i].pid.ki,
+        joints_[i].pid.kd, joints_[i].pid.i_clamp, joints_[i].pid.deadband);
+    }
+  }
+  if (!encoder_enabled_) {
+    bool any_pid = false;
+    for (auto & j : joints_) any_pid = any_pid || j.pid.enabled();
+    if (any_pid) {
+      RCLCPP_WARN(rclcpp::get_logger("RobySystem"),
+        "Gains PID configures mais encoder DESACTIVE => correction inactive "
+        "(feedback impossible sans mesure). Open-loop effectif.");
+    }
+  }
+
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -326,16 +353,79 @@ hardware_interface::CallbackReturn RobySystem::on_activate(
   for (size_t i = 0; i < joints_.size(); ++i) {
     joints_[i].command = joints_[i].position;
     joints_[i].prev_position = joints_[i].position;
+    // Reset l'etat PID : pas de windup/derivee herites d'une activation
+    // precedente (l'integrale doit repartir de zero a la pose courante).
+    joints_[i].pid.reset();
   }
   cycles_since_command_ = 0;
+
+  // --- Reglage PID live (tuning) : topic /roby/pid_gains -------------------
+  // Noeud + thread d'execution dedie pour pouvoir changer kp/ki/kd/deadband a
+  // chaud sans rebuild/relaunch. Message Float64MultiArray :
+  //   data = [joint_number, kp, ki, kd, deadband]   (joint_number : 1..5)
+  // Ex : ros2 topic pub --once /roby/pid_gains std_msgs/msg/Float64MultiArray \
+  //        "{data: [2, 0.2, 0.0, 0.0, 0.02]}"
+  if (!tuning_node_) {
+    tuning_node_ = std::make_shared<rclcpp::Node>("roby_pid_tuning");
+    pid_sub_ = tuning_node_->create_subscription<std_msgs::msg::Float64MultiArray>(
+      "/roby/pid_gains", 10,
+      std::bind(&RobySystem::on_pid_gains, this, std::placeholders::_1));
+    tuning_running_ = true;
+    tuning_thread_ = std::thread([this]() {
+      rclcpp::executors::SingleThreadedExecutor exec;
+      exec.add_node(tuning_node_);
+      while (tuning_running_ && rclcpp::ok()) {
+        exec.spin_some(std::chrono::milliseconds(50));
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    });
+    RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
+      "Reglage PID live actif : topic /roby/pid_gains [joint_n, kp, ki, kd, deadband]");
+  }
 
   RCLCPP_INFO(rclcpp::get_logger("RobySystem"), "Hardware activated");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
+void RobySystem::on_pid_gains(const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+{
+  if (msg->data.size() < 5) {
+    RCLCPP_WARN(rclcpp::get_logger("RobySystem"),
+      "/roby/pid_gains : attendu [joint_n, kp, ki, kd, deadband] (5 valeurs)");
+    return;
+  }
+  int jn = static_cast<int>(msg->data[0]);
+  std::string target = "joint_" + std::to_string(jn);
+  for (auto & j : joints_) {
+    if (j.name == target) {
+      j.pid.kp = msg->data[1];
+      j.pid.ki = msg->data[2];
+      j.pid.kd = msg->data[3];
+      j.pid.deadband = msg->data[4];
+      j.pid.reset();  // repart propre (pas de windup herite)
+      RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
+        "PID %s mis a jour LIVE : kp=%.4f ki=%.4f kd=%.4f deadband=%.4f",
+        target.c_str(), j.pid.kp, j.pid.ki, j.pid.kd, j.pid.deadband);
+      return;
+    }
+  }
+  RCLCPP_WARN(rclcpp::get_logger("RobySystem"),
+    "/roby/pid_gains : joint '%s' introuvable", target.c_str());
+}
+
 hardware_interface::CallbackReturn RobySystem::on_deactivate(
   const rclcpp_lifecycle::State & /*previous_state*/)
 {
+  // Stop le thread de reglage PID live
+  if (tuning_running_) {
+    tuning_running_ = false;
+    if (tuning_thread_.joinable()) {
+      tuning_thread_.join();
+    }
+    pid_sub_.reset();
+    tuning_node_.reset();
+  }
+
   // Shutdown all drivers
   for (auto & s : steppers_) {
     s->shutdown();
@@ -414,8 +504,11 @@ hardware_interface::return_type RobySystem::read(
 }
 
 hardware_interface::return_type RobySystem::write(
-  const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
+  const rclcpp::Time & /*time*/, const rclcpp::Duration & period)
 {
+  double dt = period.seconds();
+  if (dt <= 0.0) dt = 0.01;  // fallback 100Hz (coherent avec read())
+
   // Communication watchdog: reset when any command differs from position
   // (the controller continuously writes to joints_[i].command)
   bool any_command_active = false;
@@ -433,7 +526,23 @@ hardware_interface::return_type RobySystem::write(
   double comm_factor = SafetyMonitor::comm_watchdog_factor(cycles_since_command_);
 
   for (size_t i = 0; i < joints_.size(); ++i) {
+    // cmd = feedforward (consigne planifiee, appliquee telle quelle, aucun
+    // retard capteur) + correction PID closed-loop encodeur.
     double cmd = joints_[i].command;
+
+    // --- Closed-loop encodeur (feedback) -------------------------------------
+    // N'agit que sur les steppers avec gains configures ET encoder actif.
+    // error = consigne - position MESUREE (joints_[i].position = encodeur en
+    // option B, cf. read()). Le PID ne corrige que l'erreur residuelle lente
+    // (pas perdus, derive, gravite) ; le feedforward fait le mouvement rapide.
+    // Decouplage feedforward/feedback => l'axe reste rapide malgre la latence
+    // encodeur. Voir pid.hpp / BUG-005.
+    if (encoder_enabled_ && joints_[i].type == JointType::STEPPER &&
+        joints_[i].pid.enabled())
+    {
+      double error = joints_[i].command - joints_[i].position;
+      cmd += pid_step(joints_[i].pid, error, dt);
+    }
 
     // Apply coupling compensation for axis 3 BEFORE safety clamping
     // so the clamp works on the actual motor target, not the raw joint command.
@@ -520,13 +629,20 @@ hardware_interface::return_type RobySystem::write(
     }
   }
 
-  // Check deviations (watchdog)
-  // For coupled joints, compare against the effective (compensated) command
+  // Check deviations (watchdog) : comparer actual et commanded DANS LE MEME
+  // espace.
+  //  - encoder ON (option B) : actual = position encodeur = ESPACE-JOINT pour
+  //    tous les axes (le driver reconstruit deja l'angle joint_3 couple). Donc
+  //    commanded = consigne brute (espace-joint). NE PAS re-compenser joint_3,
+  //    sinon on compare joint-space vs motor-space => fausse deviation egale au
+  //    terme de couplage (pos_j2 * ratio ~ 18 deg) qui declenche a tort le
+  //    safety au demarrage (BUG-005, ancien "18.9 deg sur joint_3").
+  //  - encoder OFF : actual = step counter = ESPACE-MOTEUR. La, joint_3 doit
+  //    etre compare a la consigne compensee (espace-moteur). Ancien comportement.
   std::vector<double> actual, commanded;
   for (size_t i = 0; i < joints_.size(); ++i) {
     actual.push_back(joints_[i].position);
-    // For joint_3 with coupling, use the compensated target instead of raw command
-    if (coupling_enabled_ && joints_[i].name == "joint_3") {
+    if (!encoder_enabled_ && coupling_enabled_ && joints_[i].name == "joint_3") {
       double compensated = joints_[i].command;
       for (size_t j = 0; j < joints_.size(); ++j) {
         if (joints_[j].name == "joint_2") {

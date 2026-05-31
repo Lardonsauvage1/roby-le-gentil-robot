@@ -16,6 +16,8 @@
 #include <gpiod.h>
 #endif
 
+#include "roby_hardware/outlier_filter.hpp"
+
 namespace roby_hardware
 {
 
@@ -35,7 +37,10 @@ namespace roby_hardware
 ///   2. delta_raw = wrap_to_180(raw_now - raw_init)  (au boot)
 ///   3. unwrap incremental : on accumule wrap_to_180(raw_now - raw_prev) entre
 ///      reads consecutifs, en rejetant les sauts > MAX_STEP_DEG (outliers
-///      d'acquisition pulseIn cote Arduino, ~2-8% selon capteur).
+///      d'acquisition pulseIn cote Arduino, ~2-8% selon capteur). PORTE DE
+///      SORTIE : apres max_consec_rejects rejets consecutifs, on accepte quand
+///      meme (re-synchro) — sinon le filtre se bloque sur une valeur perimee
+///      lors d'un vrai mouvement rapide (lock-up observe 2026-05-31).
 ///   4. filtre median glissant (N=5) sur unwrapped pour absorber le bruit
 ///      residuel.
 ///   5. joint_angle[rad] = filtered_unwrapped[rad] * gear_num/gear_den
@@ -53,6 +58,7 @@ public:
     int query_timeout_us = 30000;        ///< 30 ms par query
     size_t median_filter_size = 5;       ///< taille du buffer median glissant
     double max_step_deg = 20.0;          ///< seuil rejet outlier (deg / cycle)
+    int max_consec_rejects = 5;          ///< porte de sortie : accepte apres N rejets
     bool mock = false;                   ///< si true, RS-485 mocke (pour tests)
   };
 
@@ -121,6 +127,7 @@ private:
     double unwrapped_deg = std::numeric_limits<double>::quiet_NaN();
     std::deque<double> median_buffer;
     int outliers_count = 0;
+    int consecutive_rejects = 0;   ///< rejets consecutifs (pour la porte de sortie)
   };
 
   /// Query un esclave (envoie 1 byte ID, attend 4 bytes reponse).

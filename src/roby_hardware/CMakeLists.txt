@@ -11,6 +11,7 @@ find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(std_msgs REQUIRED)
 
 # Find libgpiod (system library, optional — not present on PC)
 find_library(GPIOD_LIBRARY gpiod)
@@ -50,6 +51,7 @@ ament_target_dependencies(${PROJECT_NAME}
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  std_msgs
 )
 
 pluginlib_export_plugin_description_file(hardware_interface roby_hardware_plugin.xml)
@@ -94,8 +96,16 @@ if(BUILD_TESTING)
   ament_add_gtest(test_safety_monitor test/test_safety_monitor.cpp src/safety_monitor.cpp)
   target_include_directories(test_safety_monitor PUBLIC include)
   ament_target_dependencies(test_safety_monitor rclcpp)
+
+  # PID closed-loop (header-only pid.hpp) — pur, sans hardware ni deps ROS
+  ament_add_gtest(test_pid test/test_pid.cpp)
+  target_include_directories(test_pid PUBLIC include)
+
+  # Filtre rejet d'outliers + porte de sortie (header-only) — pur, sans hardware
+  ament_add_gtest(test_outlier_filter test/test_outlier_filter.cpp)
+  target_include_directories(test_outlier_filter PUBLIC include)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME})
-ament_export_dependencies(ament_index_cpp hardware_interface pluginlib rclcpp rclcpp_lifecycle)
+ament_export_dependencies(ament_index_cpp hardware_interface pluginlib rclcpp rclcpp_lifecycle std_msgs)
 ament_package()

@@ -65,6 +65,30 @@
                     <param name="joint_2_encoder_inverted">false</param>
                     <param name="joint_3_encoder_slave">3</param>
                     <param name="joint_3_encoder_inverted">true</param>
+                    <!-- PID closed-loop encodeur (feedback) — BUG-005.
+                         Le feedforward (consigne planifiee) fait le mouvement
+                         rapide ; ce PID ne corrige QUE l'erreur residuelle lente
+                         (pas perdus, derive, gravite). Gains a 0 = open-loop pur
+                         (comportement identique a avant). On les monte
+                         PROGRESSIVEMENT pendant le tuning (joint_2 en premier,
+                         le seul a deriver). Valeurs de depart suggerees au
+                         tuning : kp~0.1, ki~0.02, kd~0, i_clamp~0.05 rad. -->
+                    <!-- Closed-loop REACTIVE le 2026-05-31 (2e fois) apres mitigation
+                         EMI hardware par Sam (blindage PCB/cable cote moteur + masse).
+                         Validation moteurs ALLUMES : brut encore bruite (enc2 ~4%
+                         outliers) MAIS filtrable => apres rejet+median le signal est
+                         propre (spr.FILT<0.7 deg, 0% outliers) sur les 3 => TOUS GO.
+                         Filtre runtime C++ (rejet 20deg vs derniere acceptee + median
+                         N=5) verifie equivalent a la validation. Depart kp=0.1. -->
+                    <param name="joint_2_pid_kp">0.15</param>
+                    <param name="joint_2_pid_ki">0.0</param>
+                    <param name="joint_2_pid_kd">0.0</param>
+                    <param name="joint_2_pid_i_clamp">0.05</param>
+                    <!-- Deadband anti-jitter : sous ~1.15 deg d'erreur (= bruit
+                         capteur residuel) le PID ne corrige pas => le moteur
+                         s'arrete, le driver passe en courant reduit (anti-chauffe),
+                         plus de vibration. A resserrer si le maintien est trop lache. -->
+                    <param name="joint_2_pid_deadband">0.02</param>
                 </xacro:unless>
             </hardware>
             <joint name="joint_1">
