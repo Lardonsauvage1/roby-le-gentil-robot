@@ -15,6 +15,7 @@
 #include "roby_hardware/stepper_driver.hpp"
 #include "roby_hardware/servo_driver.hpp"
 #include "roby_hardware/safety_monitor.hpp"
+#include "roby_hardware/encoder_driver.hpp"
 
 namespace roby_hardware
 {
@@ -87,6 +88,13 @@ private:
   std::vector<int> servo_index_;    // -1 if not a servo
 
   int cycles_since_command_ = 0;
+
+  // Encoder feedback (option B : state_interface "position" = encoder reading)
+  // Active via param `encoder_enabled` (default false). Quand actif, la position
+  // publiee sur /joint_states refletera la vraie position physique mesuree, et
+  // non plus le compteur de steps open-loop.
+  bool encoder_enabled_ = false;
+  std::unique_ptr<EncoderDriver> encoder_;
 };
 
 }  // namespace roby_hardware

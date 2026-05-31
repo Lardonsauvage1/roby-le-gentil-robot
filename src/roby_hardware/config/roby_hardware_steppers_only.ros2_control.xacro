@@ -51,6 +51,20 @@
                     <param name="coupling_enabled">true</param>
                     <param name="coupling_ratio_m2_num">6000</param>
                     <param name="coupling_ratio_m2_den">45056</param>
+                    <!-- Encoder feedback (RS-485 + AS5048A) — option B
+                         /joint_states reflete la vraie position physique mesuree.
+                         Inversion par moteur calibree empiriquement le 2026-05-30. -->
+                    <param name="encoder_enabled">true</param>
+                    <param name="encoder_port">/dev/ttyAMA0</param>
+                    <param name="encoder_baud">115200</param>
+                    <param name="encoder_de_re_pin">26</param>
+                    <param name="encoder_gpio_chip">/dev/gpiochip4</param>
+                    <param name="joint_1_encoder_slave">1</param>
+                    <param name="joint_1_encoder_inverted">true</param>
+                    <param name="joint_2_encoder_slave">2</param>
+                    <param name="joint_2_encoder_inverted">false</param>
+                    <param name="joint_3_encoder_slave">3</param>
+                    <param name="joint_3_encoder_inverted">true</param>
                 </xacro:unless>
             </hardware>
             <joint name="joint_1">

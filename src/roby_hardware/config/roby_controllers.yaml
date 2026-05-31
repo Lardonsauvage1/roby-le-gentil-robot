@@ -22,3 +22,9 @@ arm_controller:
     allow_nonzero_velocity_at_trajectory_end: true
     allow_integration_in_goal_trajectories: true
     action_monitor_rate: 20.0
+    # Open-loop tracking : le controller envoie la trajectoire planifiee sans
+    # correction depuis la position mesuree. Necessite quand le bruit residuel
+    # encoder ferait osciller un closed-loop. Pour la derive sous gravite
+    # (joint_2/3), addresser cote hardware : current de hold DM860I + SW5
+    # (current-decrease) OFF pour maintenir le couple max apres inactivite.
+    open_loop_control: true

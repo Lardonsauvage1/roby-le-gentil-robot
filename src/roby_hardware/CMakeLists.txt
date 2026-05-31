@@ -6,6 +6,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -29,6 +30,7 @@ add_library(${PROJECT_NAME} SHARED
   src/stepper_driver.cpp
   src/servo_driver.cpp
   src/safety_monitor.cpp
+  src/encoder_driver.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -43,6 +45,7 @@ if(HAS_GPIOD)
 endif()
 
 ament_target_dependencies(${PROJECT_NAME}
+  ament_index_cpp
   hardware_interface
   pluginlib
   rclcpp
@@ -61,13 +64,19 @@ install(TARGETS ${PROJECT_NAME}
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 
-# Manual hardware test (only on Pi5 with gpiod)
+# Manual hardware tests (only on Pi5 with gpiod)
 if(HAS_GPIOD)
   add_executable(test_stepper_hw test/test_stepper_hw.cpp src/stepper_driver.cpp)
   target_include_directories(test_stepper_hw PUBLIC include ${GPIOD_INCLUDE_DIR})
   target_link_libraries(test_stepper_hw ${GPIOD_LIBRARY})
   target_compile_definitions(test_stepper_hw PRIVATE HAS_GPIOD)
   install(TARGETS test_stepper_hw DESTINATION lib/${PROJECT_NAME})
+
+  add_executable(test_encoder_driver_hw test/test_encoder_driver_hw.cpp src/encoder_driver.cpp)
+  target_include_directories(test_encoder_driver_hw PUBLIC include ${GPIOD_INCLUDE_DIR})
+  target_link_libraries(test_encoder_driver_hw ${GPIOD_LIBRARY})
+  target_compile_definitions(test_encoder_driver_hw PRIVATE HAS_GPIOD)
+  install(TARGETS test_encoder_driver_hw DESTINATION lib/${PROJECT_NAME})
 endif()
 
 # Tests
@@ -88,5 +97,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME})
-ament_export_dependencies(hardware_interface pluginlib rclcpp rclcpp_lifecycle)
+ament_export_dependencies(ament_index_cpp hardware_interface pluginlib rclcpp rclcpp_lifecycle)
 ament_package()

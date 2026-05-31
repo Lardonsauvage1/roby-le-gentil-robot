@@ -107,12 +107,16 @@ def generate_launch_description():
 
     # Joint velocity/acceleration limits
     limits = moveit_config.joint_limits["robot_description_planning"]["joint_limits"]
+    # Limites prudentes : evite l'overshoot dynamique en boucle ouverte (les
+    # drivers stepper ne freinent pas activement, l'inertie continue apres la
+    # commande). 0.2 rad/s = 11.5 deg/s, 0.5 rad/s2 d'acceleration : suffisant
+    # pour des mouvements de quelques degres en quelques secondes sans rebond.
     for joint in ["joint_1", "joint_2", "joint_3"]:
         limits[joint] = {
             "has_velocity_limits": True,
-            "max_velocity": 1.0,
+            "max_velocity": 0.2,
             "has_acceleration_limits": True,
-            "max_acceleration": 1.0,
+            "max_acceleration": 0.5,
         }
     for joint in ["joint_4", "joint_5"]:
         limits[joint] = {
