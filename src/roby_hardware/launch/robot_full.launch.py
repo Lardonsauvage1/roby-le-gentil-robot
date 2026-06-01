@@ -107,16 +107,19 @@ def generate_launch_description():
 
     # Joint velocity/acceleration limits
     limits = moveit_config.joint_limits["robot_description_planning"]["joint_limits"]
-    # Limites prudentes : evite l'overshoot dynamique en boucle ouverte (les
-    # drivers stepper ne freinent pas activement, l'inertie continue apres la
-    # commande). 0.2 rad/s = 11.5 deg/s, 0.5 rad/s2 d'acceleration : suffisant
-    # pour des mouvements de quelques degres en quelques secondes sans rebond.
+    # max_velocity 0.4 rad/s (23 deg/s) : 2x l'ancien 0.2 = capacite reelle du
+    # stepper (sature ~0.4 rad/s actual). Valide 2026-06-01 en closed-loop +
+    # escape-hatch encodeur + watchdog debounce (aucun lock-up, aucune coupure
+    # jusqu'a 1.05 rad/s commande). accel 1.0 rad/s2 (2x, valide 2026-06-01 : joint_1
+    # encaisse 40deg/0.8s sans trip, debounce absorbe le self-lag ; deflexion
+    # inertielle j2/3 seulement aux grandes amplitudes rapides). Plus vite =
+    # stepper plus rapide, pas un reglage soft.
     for joint in ["joint_1", "joint_2", "joint_3"]:
         limits[joint] = {
             "has_velocity_limits": True,
-            "max_velocity": 0.2,
+            "max_velocity": 0.4,
             "has_acceleration_limits": True,
-            "max_acceleration": 0.5,
+            "max_acceleration": 1.0,
         }
     for joint in ["joint_4", "joint_5"]:
         limits[joint] = {

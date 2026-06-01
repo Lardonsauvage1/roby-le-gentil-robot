@@ -60,7 +60,7 @@
                     <param name="encoder_de_re_pin">26</param>
                     <param name="encoder_gpio_chip">/dev/gpiochip4</param>
                     <param name="joint_1_encoder_slave">1</param>
-                    <param name="joint_1_encoder_inverted">true</param>
+                    <param name="joint_1_encoder_inverted">false</param>
                     <param name="joint_2_encoder_slave">2</param>
                     <param name="joint_2_encoder_inverted">false</param>
                     <param name="joint_3_encoder_slave">3</param>
@@ -88,7 +88,33 @@
                          capteur residuel) le PID ne corrige pas => le moteur
                          s'arrete, le driver passe en courant reduit (anti-chauffe),
                          plus de vibration. A resserrer si le maintien est trop lache. -->
-                    <param name="joint_2_pid_deadband">0.02</param>
+                    <param name="joint_2_pid_deadband">0.03</param>
+                    <!-- Rampe douce en sortie de deadband (rad) : la correction
+                         monte de 0 a sa pleine valeur sur cette bande au-dessus
+                         de la deadband, au lieu d'un saut brutal => supprime le
+                         pompage/cycle limite quand le residuel stationne au bord
+                         (cf. vibration joint_2 a -25deg). 0 => mur d'origine.
+                         Reglable en live : 6e valeur de /roby/pid_gains. -->
+                    <param name="joint_2_pid_deadband_ramp">0.02</param>
+                    <!-- joint_1 (base) closed-loop : signe encodeur corrige
+                         (joint_1_encoder_inverted=false). db=0.04 (un cran de
+                         plus que joint_2) pour ignorer les glitchs encodeur. -->
+                    <param name="joint_1_pid_kp">0.15</param>
+                    <param name="joint_1_pid_ki">0.0</param>
+                    <param name="joint_1_pid_kd">0.0</param>
+                    <param name="joint_1_pid_i_clamp">0.05</param>
+                    <param name="joint_1_pid_deadband">0.04</param>
+                    <param name="joint_1_pid_deadband_ramp">0.02</param>
+                    <!-- joint_3 (coude, couple a motor_2) closed-loop. Le fix
+                         couplage (motor_3 compense la cible EFFECTIVE de joint_2
+                         = cmd + correction PID) supprime la vibration parasite
+                         couplee. db=0.04, ramp=0.02. -->
+                    <param name="joint_3_pid_kp">0.15</param>
+                    <param name="joint_3_pid_ki">0.0</param>
+                    <param name="joint_3_pid_kd">0.0</param>
+                    <param name="joint_3_pid_i_clamp">0.05</param>
+                    <param name="joint_3_pid_deadband">0.04</param>
+                    <param name="joint_3_pid_deadband_ramp">0.02</param>
                 </xacro:unless>
             </hardware>
             <joint name="joint_1">

@@ -101,6 +101,13 @@ private:
 
   int cycles_since_command_ = 0;
 
+  // Watchdog deviation : nb de cycles consecutifs ou la deviation depasse le
+  // seuil critique. Desactivation seulement apres kCriticalDeviationDebounce
+  // cycles (debounce) => un glitch encodeur d un seul echantillon (burst EMI)
+  // est ignore (le compteur retombe a 0), un vrai runaway persiste et coupe.
+  int critical_deviation_streak_ = 0;
+  static constexpr int kCriticalDeviationDebounce = 8;
+
   // Encoder feedback (option B : state_interface "position" = encoder reading)
   // Active via param `encoder_enabled` (default false). Quand actif, la position
   // publiee sur /joint_states refletera la vraie position physique mesuree, et

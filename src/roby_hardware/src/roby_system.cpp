@@ -149,7 +149,17 @@ hardware_interface::CallbackReturn RobySystem::on_init(
       joints_[i].pid.ki = get_param_double(joint.name + "_pid_ki", 0.0);
       joints_[i].pid.kd = get_param_double(joint.name + "_pid_kd", 0.0);
       joints_[i].pid.i_clamp = get_param_double(joint.name + "_pid_i_clamp", 0.0);
-      joints_[i].pid.deadband = get_param_double(joint.name + "_pid_deadband", 0.0);
+      joints_[i].pid.deadband_settled =
+        get_param_double(joint.name + "_pid_deadband", 0.0);
+      joints_[i].pid.deadband = joints_[i].pid.deadband_settled;  // actif initial
+      joints_[i].pid.deadband_ramp =
+        get_param_double(joint.name + "_pid_deadband_ramp", 0.0);
+      // Deadband deux-phases (precision) : serree pendant le mouvement, large au
+      // repos. settle_cycles=0 => desactive (deadband fixe = settled, comme avant).
+      joints_[i].pid.deadband_moving =
+        get_param_double(joint.name + "_pid_deadband_moving", 0.0);
+      joints_[i].pid.settle_cycles =
+        get_param_int(joint.name + "_pid_settle_cycles", 0);
 
     } else if (type_str == "servo") {
       joints_[i].type = JointType::SERVO;
@@ -287,9 +297,12 @@ hardware_interface::CallbackReturn RobySystem::on_init(
   for (size_t i = 0; i < joints_.size(); ++i) {
     if (joints_[i].pid.enabled()) {
       RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
-        "%s closed-loop PID: kp=%.4f ki=%.4f kd=%.4f i_clamp=%.4f deadband=%.4f rad",
+        "%s closed-loop PID: kp=%.4f ki=%.4f kd=%.4f i_clamp=%.4f db_settled=%.4f "
+        "ramp=%.4f db_moving=%.4f settle=%d",
         joints_[i].name.c_str(), joints_[i].pid.kp, joints_[i].pid.ki,
-        joints_[i].pid.kd, joints_[i].pid.i_clamp, joints_[i].pid.deadband);
+        joints_[i].pid.kd, joints_[i].pid.i_clamp, joints_[i].pid.deadband_settled,
+        joints_[i].pid.deadband_ramp, joints_[i].pid.deadband_moving,
+        joints_[i].pid.settle_cycles);
     }
   }
   if (!encoder_enabled_) {
@@ -391,7 +404,8 @@ void RobySystem::on_pid_gains(const std_msgs::msg::Float64MultiArray::SharedPtr 
 {
   if (msg->data.size() < 5) {
     RCLCPP_WARN(rclcpp::get_logger("RobySystem"),
-      "/roby/pid_gains : attendu [joint_n, kp, ki, kd, deadband] (5 valeurs)");
+      "/roby/pid_gains : attendu [joint_n, kp, ki, kd, deadband] (5 valeurs, "
+      "ou 6 avec deadband_ramp)");
     return;
   }
   int jn = static_cast<int>(msg->data[0]);
@@ -401,11 +415,20 @@ void RobySystem::on_pid_gains(const std_msgs::msg::Float64MultiArray::SharedPtr 
       j.pid.kp = msg->data[1];
       j.pid.ki = msg->data[2];
       j.pid.kd = msg->data[3];
-      j.pid.deadband = msg->data[4];
-      j.pid.reset();  // repart propre (pas de windup herite)
+      j.pid.deadband_settled = msg->data[4];  // deadband au repos (large)
+      // 6e = deadband_ramp ; 7e = deadband_moving (serree, deux-phases) ;
+      // 8e = settle_cycles (0 => two-phase off).
+      if (msg->data.size() >= 6) { j.pid.deadband_ramp = msg->data[5]; }
+      if (msg->data.size() >= 7) { j.pid.deadband_moving = msg->data[6]; }
+      if (msg->data.size() >= 8) {
+        j.pid.settle_cycles = static_cast<int>(msg->data[7]);
+      }
+      j.pid.reset();  // repart propre (deadband=settled, pas de windup herite)
       RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
-        "PID %s mis a jour LIVE : kp=%.4f ki=%.4f kd=%.4f deadband=%.4f",
-        target.c_str(), j.pid.kp, j.pid.ki, j.pid.kd, j.pid.deadband);
+        "PID %s LIVE : kp=%.4f ki=%.4f kd=%.4f db_settled=%.4f ramp=%.4f "
+        "db_moving=%.4f settle=%d",
+        target.c_str(), j.pid.kp, j.pid.ki, j.pid.kd, j.pid.deadband_settled,
+        j.pid.deadband_ramp, j.pid.deadband_moving, j.pid.settle_cycles);
       return;
     }
   }
@@ -525,6 +548,14 @@ hardware_interface::return_type RobySystem::write(
   }
   double comm_factor = SafetyMonitor::comm_watchdog_factor(cycles_since_command_);
 
+  // Cible EFFECTIVE de joint_2 (commande + correction PID) pour la compensation
+  // de couplage de joint_3 ci-dessous. Init a la commande (fallback) ; mise a
+  // jour avec la correction PID quand on traite joint_2 (qui precede joint_3).
+  double joint_2_effective_cmd = 0.0;
+  for (auto & j2 : joints_) {
+    if (j2.name == "joint_2") { joint_2_effective_cmd = j2.command; break; }
+  }
+
   for (size_t i = 0; i < joints_.size(); ++i) {
     // cmd = feedforward (consigne planifiee, appliquee telle quelle, aucun
     // retard capteur) + correction PID closed-loop encodeur.
@@ -540,8 +571,17 @@ hardware_interface::return_type RobySystem::write(
     if (encoder_enabled_ && joints_[i].type == JointType::STEPPER &&
         joints_[i].pid.enabled())
     {
+      // Deux-phases : recalcule la deadband active selon que la consigne bouge
+      // (deadband serree => precision) ou est stabilisee (large => anti-jitter).
+      joints_[i].pid.update_deadband(joints_[i].command);
       double error = joints_[i].command - joints_[i].position;
       cmd += pid_step(joints_[i].pid, error, dt);
+    }
+
+    // Memorise la cible effective de joint_2 (commande + correction PID) pour
+    // la compensation de couplage de joint_3 (cf. plus bas).
+    if (joints_[i].name == "joint_2") {
+      joint_2_effective_cmd = cmd;
     }
 
     // Apply coupling compensation for axis 3 BEFORE safety clamping
@@ -552,13 +592,13 @@ hardware_interface::return_type RobySystem::write(
     // compensation et envoyer des steps parasites a chaque cycle (overrun).
     // La commande de joint_2 est ce que le controller veut atteindre, donc
     // c'est la bonne reference pour pre-compenser motor_3.
+    // Couplage : compense motor_3 avec joint_2_effective_cmd (commande + PID),
+    // PAS la position encodeur brute. Inclure la correction PID de joint_2 fait
+    // suivre motor_3 aux vrais mouvements de motor_2 (closed-loop joint_2) =>
+    // joint_3 reste en place => plus de vibration parasite couplee. La deadband
+    // de joint_2 garantit correction=0 au repos (pas d injection de bruit).
     if (coupling_enabled_ && joints_[i].name == "joint_3") {
-      for (size_t j = 0; j < joints_.size(); ++j) {
-        if (joints_[j].name == "joint_2") {
-          cmd = compensate_coupling(cmd, joints_[j].command);
-          break;
-        }
-      }
+      cmd = compensate_coupling(cmd, joint_2_effective_cmd);
     }
 
     // Apply safety clamping (on the effective command, after coupling).
@@ -656,18 +696,28 @@ hardware_interface::return_type RobySystem::write(
     }
   }
   if (safety_.check_all_deviations(actual, commanded)) {
-    // Log which joint is deviating for debugging
+    critical_deviation_streak_++;
+    // Log which joint is deviating for debugging (chaque cycle de la serie)
     for (size_t i = 0; i < actual.size() && i < commanded.size(); ++i) {
       double dev = std::abs(actual[i] - commanded[i]);
       if (dev > 0.01) {
         RCLCPP_WARN(rclcpp::get_logger("RobySystem"),
-          "Deviation on %s: actual=%.4f cmd=%.4f dev=%.4f rad (%.1f deg)",
-          joints_[i].name.c_str(), actual[i], commanded[i], dev, dev * 180.0 / M_PI);
+          "Deviation on %s: actual=%.4f cmd=%.4f dev=%.4f rad (%.1f deg) [streak %d/%d]",
+          joints_[i].name.c_str(), actual[i], commanded[i], dev, dev * 180.0 / M_PI,
+          critical_deviation_streak_, kCriticalDeviationDebounce);
       }
     }
-    RCLCPP_ERROR(rclcpp::get_logger("RobySystem"),
-      "CRITICAL: Joint deviation exceeded threshold! Requesting deactivation.");
-    return hardware_interface::return_type::ERROR;
+    // Debounce : ne couper qu apres N cycles consecutifs au-dessus du seuil.
+    // Un glitch encodeur d un seul echantillon (burst EMI) retombe au cycle
+    // suivant => ignore. Un vrai runaway persiste et grandit => atteint N => coupe.
+    if (critical_deviation_streak_ >= kCriticalDeviationDebounce) {
+      RCLCPP_ERROR(rclcpp::get_logger("RobySystem"),
+        "CRITICAL: Joint deviation exceeded threshold %d cycles consecutifs -> deactivation.",
+        critical_deviation_streak_);
+      return hardware_interface::return_type::ERROR;
+    }
+  } else {
+    critical_deviation_streak_ = 0;
   }
 
   return hardware_interface::return_type::OK;
