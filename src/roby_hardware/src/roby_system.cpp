@@ -172,6 +172,8 @@ hardware_interface::CallbackReturn RobySystem::on_init(
       cfg.angle_max_deg = get_param_double(joint.name + "_angle_max_deg", 180.0);
       cfg.angle_init_deg = get_param_double(joint.name + "_angle_init_deg", 90.0);
       cfg.inverted = get_param_bool(joint.name + "_inverted", false);
+      joints_[i].servo_offset_deg =
+        get_param_double(joint.name + "_servo_offset_deg", cfg.angle_init_deg);
 
 #ifdef __linux__
       // Only try real I2C if the device exists
@@ -371,7 +373,6 @@ hardware_interface::CallbackReturn RobySystem::on_activate(
     joints_[i].pid.reset();
   }
   cycles_since_command_ = 0;
-
   // --- Reglage PID live (tuning) : topic /roby/pid_gains -------------------
   // Noeud + thread d'execution dedie pour pouvoir changer kp/ki/kd/deadband a
   // chaud sans rebuild/relaunch. Message Float64MultiArray :
@@ -516,7 +517,8 @@ hardware_interface::return_type RobySystem::read(
       }
     } else if (joints_[i].type == JointType::SERVO && servo_index_[i] >= 0) {
       double angle_deg = servos_[servo_index_[i]]->get_angle_deg();
-      joints_[i].position = ServoDriver::deg_to_rad(angle_deg);
+      joints_[i].position =
+        ServoDriver::deg_to_rad(angle_deg - joints_[i].servo_offset_deg);
     }
     // MOCK joints: position = command (set in write)
 
@@ -631,7 +633,7 @@ hardware_interface::return_type RobySystem::write(
       steppers_[stepper_index_[i]]->prepare_move(cmd, max_steps);
 
     } else if (joints_[i].type == JointType::SERVO && servo_index_[i] >= 0) {
-      double angle_deg = ServoDriver::rad_to_deg(cmd);
+      double angle_deg = joints_[i].servo_offset_deg + ServoDriver::rad_to_deg(cmd);
       servos_[servo_index_[i]]->set_angle_deg(angle_deg);
 
     } else {

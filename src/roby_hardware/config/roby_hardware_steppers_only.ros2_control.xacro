@@ -40,10 +40,22 @@
                     <param name="joint_3_gear_ratio_num">300</param>
                     <param name="joint_3_gear_ratio_den">1408</param>
                     <param name="joint_3_inverted">true</param>
-                    <!-- Axis 4: MOCK (servo not tested yet) -->
-                    <param name="joint_4_type">mock</param>
-                    <!-- Axis 5: MOCK (brushless not wired) -->
-                    <param name="joint_5_type">mock</param>
+                    <!-- Axis 4: servo MG996R, PCA9685 CH0 -->
+                    <param name="joint_4_type">servo</param>
+                    <param name="joint_4_servo_channel">0</param>
+                    <param name="joint_4_angle_min_deg">0.0</param>
+                    <param name="joint_4_angle_max_deg">270.0</param>
+                    <param name="joint_4_angle_init_deg">135.0</param>
+                    <param name="joint_4_servo_offset_deg">135.0</param>
+                    <param name="joint_4_inverted">false</param>
+                    <!-- Axis 5: servo provisoire (brushless non monte), PCA9685 CH1 -->
+                    <param name="joint_5_type">servo</param>
+                    <param name="joint_5_servo_channel">1</param>
+                    <param name="joint_5_angle_min_deg">0.0</param>
+                    <param name="joint_5_angle_max_deg">180.0</param>
+                    <param name="joint_5_angle_init_deg">41.3</param>
+                    <param name="joint_5_servo_offset_deg">41.3</param>
+                    <param name="joint_5_inverted">true</param>
                     <!-- I2C config (unused but kept for init) -->
                     <param name="i2c_bus">/dev/i2c-1</param>
                     <param name="pca9685_address">0x40</param>
@@ -88,7 +100,7 @@
                          capteur residuel) le PID ne corrige pas => le moteur
                          s'arrete, le driver passe en courant reduit (anti-chauffe),
                          plus de vibration. A resserrer si le maintien est trop lache. -->
-                    <param name="joint_2_pid_deadband">0.03</param>
+                    <param name="joint_2_pid_deadband">0.05</param>
                     <!-- Rampe douce en sortie de deadband (rad) : la correction
                          monte de 0 a sa pleine valeur sur cette bande au-dessus
                          de la deadband, au lieu d'un saut brutal => supprime le
@@ -103,7 +115,7 @@
                     <param name="joint_1_pid_ki">0.0</param>
                     <param name="joint_1_pid_kd">0.0</param>
                     <param name="joint_1_pid_i_clamp">0.05</param>
-                    <param name="joint_1_pid_deadband">0.04</param>
+                    <param name="joint_1_pid_deadband">0.06</param>
                     <param name="joint_1_pid_deadband_ramp">0.02</param>
                     <!-- joint_3 (coude, couple a motor_2) closed-loop. Le fix
                          couplage (motor_3 compense la cible EFFECTIVE de joint_2
@@ -113,7 +125,7 @@
                     <param name="joint_3_pid_ki">0.0</param>
                     <param name="joint_3_pid_kd">0.0</param>
                     <param name="joint_3_pid_i_clamp">0.05</param>
-                    <param name="joint_3_pid_deadband">0.04</param>
+                    <param name="joint_3_pid_deadband">0.06</param>
                     <param name="joint_3_pid_deadband_ramp">0.02</param>
                 </xacro:unless>
             </hardware>

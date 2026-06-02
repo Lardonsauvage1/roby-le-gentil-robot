@@ -40,6 +40,7 @@ struct JointInfo
   double velocity = 0.0;
   double command = 0.0;
   double prev_position = 0.0;
+  double servo_offset_deg = 0.0;  // centre servo (0 rad joint = cet angle)
   // Closed-loop encodeur (feedback) en complement du feedforward (command).
   // Gains a 0 par defaut => correction nulle => open-loop. Voir pid.hpp / BUG-005.
   PidState pid;

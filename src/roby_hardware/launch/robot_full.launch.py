@@ -60,7 +60,7 @@ def generate_launch_description():
     )
 
     jsb_spawner = TimerAction(
-        period=3.0,
+        period=6.0,
         actions=[
             Node(
                 package="controller_manager",
@@ -76,7 +76,7 @@ def generate_launch_description():
     )
 
     arm_spawner = TimerAction(
-        period=3.0,
+        period=6.0,
         actions=[
             Node(
                 package="controller_manager",
@@ -133,7 +133,7 @@ def generate_launch_description():
     move_group_actions = generate_move_group_launch(moveit_config).entities
 
     move_group_delayed = TimerAction(
-        period=8.0,
+        period=12.0,
         actions=list(move_group_actions),
     )
 
