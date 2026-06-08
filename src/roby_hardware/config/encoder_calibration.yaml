@@ -1,8 +1,12 @@
 # Calibration des zeros encodeurs AS5048A
 # Pose de reference physique : bras plie 90 deg + axe 1 aligne
 # = tous joints URDF a 0 rad
-# Mesure : mediane sur 10 runs x 100 lectures (2026-05-30), spread inter-runs <0.06 deg
+# motor_1 / motor_3 : mediane 10 runs x 100 lectures (2026-05-30), spread <0.06 deg
+# motor_2 : RE-CALIBRE 2026-05-31 apres recentrage de l'aimant N2 (l'ancien
+#   347.6896 etait perime). Snapshot a la pose de reference posee a la main ;
+#   temoins N1/N3 a ~1.5 deg du zero => zero joint_2 connu a ~1-2 deg pres
+#   (suffisant pour le tuning PID ; a affiner avec l'outil de jog visuel).
 encoder_raw_init_deg:
   motor_1: 49.3788
-  motor_2: 347.6896
+  motor_2: 76.9
   motor_3: 124.6748

@@ -49,22 +49,72 @@
                     <param name="pca9685_address">0x40</param>
                     <!-- Coupling axes 2/3 ENABLED -->
                     <param name="coupling_enabled">true</param>
-                    <param name="coupling_ratio_m2_num">6000</param>
+                    <param name="coupling_ratio_m2_num">-6000</param>
                     <param name="coupling_ratio_m2_den">45056</param>
                     <!-- Encoder feedback (RS-485 + AS5048A) — option B
                          /joint_states reflete la vraie position physique mesuree.
                          Inversion par moteur calibree empiriquement le 2026-05-30. -->
-                    <param name="encoder_enabled">true</param>
+                    <param name="encoder_enabled">false</param>
                     <param name="encoder_port">/dev/ttyAMA0</param>
                     <param name="encoder_baud">115200</param>
                     <param name="encoder_de_re_pin">26</param>
                     <param name="encoder_gpio_chip">/dev/gpiochip4</param>
                     <param name="joint_1_encoder_slave">1</param>
-                    <param name="joint_1_encoder_inverted">true</param>
+                    <param name="joint_1_encoder_inverted">false</param>
                     <param name="joint_2_encoder_slave">2</param>
                     <param name="joint_2_encoder_inverted">false</param>
                     <param name="joint_3_encoder_slave">3</param>
                     <param name="joint_3_encoder_inverted">true</param>
+                    <!-- PID closed-loop encodeur (feedback) — BUG-005.
+                         Le feedforward (consigne planifiee) fait le mouvement
+                         rapide ; ce PID ne corrige QUE l'erreur residuelle lente
+                         (pas perdus, derive, gravite). Gains a 0 = open-loop pur
+                         (comportement identique a avant). On les monte
+                         PROGRESSIVEMENT pendant le tuning (joint_2 en premier,
+                         le seul a deriver). Valeurs de depart suggerees au
+                         tuning : kp~0.1, ki~0.02, kd~0, i_clamp~0.05 rad. -->
+                    <!-- Closed-loop REACTIVE le 2026-05-31 (2e fois) apres mitigation
+                         EMI hardware par Sam (blindage PCB/cable cote moteur + masse).
+                         Validation moteurs ALLUMES : brut encore bruite (enc2 ~4%
+                         outliers) MAIS filtrable => apres rejet+median le signal est
+                         propre (spr.FILT<0.7 deg, 0% outliers) sur les 3 => TOUS GO.
+                         Filtre runtime C++ (rejet 20deg vs derniere acceptee + median
+                         N=5) verifie equivalent a la validation. Depart kp=0.1. -->
+                    <param name="joint_2_pid_kp">0.15</param>
+                    <param name="joint_2_pid_ki">0.0</param>
+                    <param name="joint_2_pid_kd">0.0</param>
+                    <param name="joint_2_pid_i_clamp">0.05</param>
+                    <!-- Deadband anti-jitter : sous ~1.15 deg d'erreur (= bruit
+                         capteur residuel) le PID ne corrige pas => le moteur
+                         s'arrete, le driver passe en courant reduit (anti-chauffe),
+                         plus de vibration. A resserrer si le maintien est trop lache. -->
+                    <param name="joint_2_pid_deadband">0.03</param>
+                    <!-- Rampe douce en sortie de deadband (rad) : la correction
+                         monte de 0 a sa pleine valeur sur cette bande au-dessus
+                         de la deadband, au lieu d'un saut brutal => supprime le
+                         pompage/cycle limite quand le residuel stationne au bord
+                         (cf. vibration joint_2 a -25deg). 0 => mur d'origine.
+                         Reglable en live : 6e valeur de /roby/pid_gains. -->
+                    <param name="joint_2_pid_deadband_ramp">0.02</param>
+                    <!-- joint_1 (base) closed-loop : signe encodeur corrige
+                         (joint_1_encoder_inverted=false). db=0.04 (un cran de
+                         plus que joint_2) pour ignorer les glitchs encodeur. -->
+                    <param name="joint_1_pid_kp">0.15</param>
+                    <param name="joint_1_pid_ki">0.0</param>
+                    <param name="joint_1_pid_kd">0.0</param>
+                    <param name="joint_1_pid_i_clamp">0.05</param>
+                    <param name="joint_1_pid_deadband">0.04</param>
+                    <param name="joint_1_pid_deadband_ramp">0.02</param>
+                    <!-- joint_3 (coude, couple a motor_2) closed-loop. Le fix
+                         couplage (motor_3 compense la cible EFFECTIVE de joint_2
+                         = cmd + correction PID) supprime la vibration parasite
+                         couplee. db=0.04, ramp=0.02. -->
+                    <param name="joint_3_pid_kp">0.15</param>
+                    <param name="joint_3_pid_ki">0.0</param>
+                    <param name="joint_3_pid_kd">0.0</param>
+                    <param name="joint_3_pid_i_clamp">0.05</param>
+                    <param name="joint_3_pid_deadband">0.04</param>
+                    <param name="joint_3_pid_deadband_ramp">0.02</param>
                 </xacro:unless>
             </hardware>
             <joint name="joint_1">
