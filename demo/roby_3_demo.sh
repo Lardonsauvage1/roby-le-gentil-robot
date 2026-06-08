@@ -8,7 +8,6 @@
 # Sequence : init -> A -> verrou -> B -> pince -> C -> D -> prise
 #            -> E -> depose -> A -> deverrou -> init
 # =====================================================================
-set -u
 PI=roby@192.168.1.37
 
 # --- 1) IHM (RViz) sur le PC ---
