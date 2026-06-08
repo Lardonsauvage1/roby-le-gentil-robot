@@ -1,6 +1,12 @@
 controller_manager:
   ros__parameters:
     update_rate: 100
+    # Durcissement temps-reel : verrouille les pages memoire en RAM (mlockall)
+    # pour eviter les defauts de page dans la boucle RT (cause des hoquets ~90ms
+    # a la reception d'un nouveau goal de trajectoire). Necessite le droit
+    # memlock (cf. /etc/security/limits.d/99-roby-rt.conf : roby memlock unlimited).
+    lock_memory: true
+    thread_priority: 50
     arm_controller:
       type: joint_trajectory_controller/JointTrajectoryController
     joint_state_broadcaster:

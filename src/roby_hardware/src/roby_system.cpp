@@ -211,13 +211,18 @@ hardware_interface::CallbackReturn RobySystem::on_init(
       // The actual limits come from the URDF <limit> tag, available via joint info
     }
 
-    // Set velocity and deviation thresholds based on joint type
+    // Set velocity and deviation thresholds based on joint type.
+    // max_accel_rad_per_tick2 limite la variation de vitesse par cycle => un
+    // rattrapage apres overrun RT rampe au lieu de sauter (anti "petit saut").
+    // ~1/10 de la vitesse max => atteint la vitesse max en ~10 cycles (100ms).
     if (joints_[i].type == JointType::STEPPER) {
       sc.max_velocity_rad_per_tick = 3.0 * DEG_TO_RAD;   // 3°/tick
+      sc.max_accel_rad_per_tick2 = 0.3 * DEG_TO_RAD;      // 0.3°/tick²
       sc.warning_deviation_rad = 5.0 * DEG_TO_RAD;        // 5°
       sc.critical_deviation_rad = 15.0 * DEG_TO_RAD;      // 15°
     } else {
       sc.max_velocity_rad_per_tick = 8.0 * DEG_TO_RAD;   // 8°/tick
+      sc.max_accel_rad_per_tick2 = 0.8 * DEG_TO_RAD;      // 0.8°/tick²
       sc.warning_deviation_rad = 8.0 * DEG_TO_RAD;        // 8°
       sc.critical_deviation_rad = 20.0 * DEG_TO_RAD;      // 20°
     }

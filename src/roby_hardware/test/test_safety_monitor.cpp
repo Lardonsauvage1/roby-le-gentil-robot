@@ -170,3 +170,73 @@ TEST_F(SafetyMonitorTest, CommWatchdog_Stopped)
   EXPECT_NEAR(SafetyMonitor::comm_watchdog_factor(100), 0.0, TOLERANCE);
   EXPECT_NEAR(SafetyMonitor::comm_watchdog_factor(200), 0.0, TOLERANCE);
 }
+
+// ---- Acceleration limiting ----
+
+class AccelLimitTest : public ::testing::Test
+{
+protected:
+  SafetyMonitor monitor;
+
+  void SetUp() override
+  {
+    JointSafetyConfig j;
+    j.name = "joint_1";
+    j.position_min_rad = -M_PI;
+    j.position_max_rad = M_PI;
+    j.max_velocity_rad_per_tick = 3.0 * DEG;
+    j.max_accel_rad_per_tick2 = 0.5 * DEG;   // ramp velocity by 0.5°/tick each cycle
+    j.decel_zone_fraction = 0.10;
+    j.decel_min_factor = 0.25;
+    std::vector<JointSafetyConfig> cfgs{j};
+    monitor.init(cfgs);
+  }
+};
+
+TEST_F(AccelLimitTest, FirstStepLimitedByAccel)
+{
+  // From rest (prev_delta = 0), a far target would be velocity-clamped to 3°,
+  // but the acceleration limit caps the first delta to 0.5°.
+  double cmd = monitor.clamp_command(0, 0.0, 90.0 * DEG);
+  EXPECT_NEAR(cmd, 0.5 * DEG, TOLERANCE);
+}
+
+TEST_F(AccelLimitTest, RampsUpOverCycles)
+{
+  double pos = 0.0;
+  double d1 = monitor.clamp_command(0, pos, 90.0 * DEG) - pos; pos += d1;
+  double d2 = monitor.clamp_command(0, pos, 90.0 * DEG) - pos; pos += d2;
+  double d3 = monitor.clamp_command(0, pos, 90.0 * DEG) - pos;
+  EXPECT_NEAR(d1, 0.5 * DEG, TOLERANCE);
+  EXPECT_NEAR(d2, 1.0 * DEG, TOLERANCE);
+  EXPECT_NEAR(d3, 1.5 * DEG, TOLERANCE);
+}
+
+TEST_F(AccelLimitTest, SaturatesAtVelocityLimit)
+{
+  double pos = 0.0;
+  double d = 0.0;
+  for (int i = 0; i < 20; ++i) {
+    d = monitor.clamp_command(0, pos, 90.0 * DEG) - pos;
+    pos += d;
+  }
+  // After ramping up, the per-cycle delta saturates at the velocity limit.
+  EXPECT_NEAR(d, 3.0 * DEG, TOLERANCE);
+}
+
+TEST_F(AccelLimitTest, DisabledWhenAccelZero)
+{
+  // With max_accel = 0 the acceleration limit is bypassed: behaviour is the
+  // original pure velocity clamp (jumps straight to 3°).
+  SafetyMonitor m;
+  JointSafetyConfig j;
+  j.name = "j";
+  j.position_min_rad = -M_PI;
+  j.position_max_rad = M_PI;
+  j.max_velocity_rad_per_tick = 3.0 * DEG;
+  j.max_accel_rad_per_tick2 = 0.0;  // disabled
+  std::vector<JointSafetyConfig> cfgs{j};
+  m.init(cfgs);
+  double cmd = m.clamp_command(0, 0.0, 90.0 * DEG);
+  EXPECT_NEAR(cmd, 3.0 * DEG, TOLERANCE);
+}

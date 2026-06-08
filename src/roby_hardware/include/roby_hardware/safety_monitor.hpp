@@ -14,6 +14,7 @@ struct JointSafetyConfig
   double position_min_rad = 0.0;   // lower soft limit
   double position_max_rad = 0.0;   // upper soft limit
   double max_velocity_rad_per_tick = 0.0;  // max position change per control cycle
+  double max_accel_rad_per_tick2 = 0.0;    // max change of per-cycle delta (0 = disabled)
   double warning_deviation_rad = 0.0;      // watchdog warning threshold
   double critical_deviation_rad = 0.0;     // watchdog critical threshold (trigger stop)
   double decel_zone_fraction = 0.10;       // 10% of range at each end
@@ -31,7 +32,9 @@ public:
   /// Clamp a commanded position for one joint. Returns the safe position.
   /// current_rad: current actual position
   /// command_rad: desired target position
-  double clamp_command(size_t joint_idx, double current_rad, double command_rad) const;
+  /// NOTE: non-const because it tracks the previous per-cycle delta per joint
+  /// to apply acceleration limiting (smooths catch-up after an RT overrun).
+  double clamp_command(size_t joint_idx, double current_rad, double command_rad);
 
   /// Check deviation between commanded and actual position.
   /// Returns 0 = OK, 1 = warning, 2 = critical.
@@ -57,6 +60,9 @@ private:
   double decel_factor(size_t joint_idx, double position_rad) const;
 
   std::vector<JointSafetyConfig> configs_;
+
+  // Previous per-cycle delta per joint (rad/tick), for acceleration limiting.
+  std::vector<double> prev_delta_;
 
   static constexpr int COMM_WATCHDOG_START = 50;   // start slowing after 50 cycles (0.5s)
   static constexpr int COMM_WATCHDOG_STOP = 100;   // full stop after 100 cycles (1.0s)
