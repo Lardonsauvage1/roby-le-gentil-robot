@@ -105,6 +105,12 @@ def generate_launch_description():
         package_name="neuroneimitationcarote_moveit_config"
     ).to_moveit_configs()
 
+    # Force move_group a utiliser la MEME description (RobySystem) que le control_node.
+    # Sinon move_group publie l URDF mock (FakeSystem) de la config MoveIt sur
+    # /robot_description et le ros2_control_node (qui lit ce topic en Jazzy) peut
+    # charger le mock a la place du vrai hardware (race intermittente).
+    moveit_config.robot_description = {"robot_description": robot_description_param}
+
     # Joint velocity/acceleration limits
     limits = moveit_config.joint_limits["robot_description_planning"]["joint_limits"]
     # max_velocity 0.4 rad/s (23 deg/s) : 2x l'ancien 0.2 = capacite reelle du
@@ -117,9 +123,9 @@ def generate_launch_description():
     for joint in ["joint_1", "joint_2", "joint_3"]:
         limits[joint] = {
             "has_velocity_limits": True,
-            "max_velocity": 0.4,
+            "max_velocity": 0.1,
             "has_acceleration_limits": True,
-            "max_acceleration": 1.0,
+            "max_acceleration": 0.2,
         }
     for joint in ["joint_4", "joint_5"]:
         limits[joint] = {
@@ -130,6 +136,13 @@ def generate_launch_description():
         }
 
     # Launch move_group (delayed to let controllers start first)
+    # Open-loop : desactive le controle de tolerance start-state (0.01 rad trop
+    # serre pour des steppers sans encodeur -> sinon ABORT start point deviates
+    # a chaque replanification apres un mouvement). 0.0 = controle saute.
+    moveit_config.trajectory_execution["trajectory_execution"] = {
+        "allowed_start_tolerance": 0.0,
+    }
+
     move_group_actions = generate_move_group_launch(moveit_config).entities
 
     move_group_delayed = TimerAction(

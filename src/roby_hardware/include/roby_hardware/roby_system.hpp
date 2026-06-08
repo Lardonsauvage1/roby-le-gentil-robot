@@ -122,6 +122,24 @@ private:
   rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr pid_sub_;
   std::thread tuning_thread_;
   std::atomic<bool> tuning_running_{false};
+
+  // --- Partie B : recalage one-shot au settle (joint_2/3 open-loop) ---------
+  // A l'arret (consigne stable + axes immobiles), grosse mediane des lectures
+  // encodeur (robuste au bruit) -> recale le compteur de pas dessus -> le
+  // feedforward comble l'ecart, puis stop. Max kSettleMaxCorrections / mouvement.
+  void settle_recalibrate();
+  std::vector<double> prev_commands_;
+  std::vector<double> prev_step_pos_;
+  std::vector<std::vector<double>> settle_samples_;
+  int settle_counter_ = 0;
+  int settle_phase_ = 0;
+  int settle_correction_count_ = 0;
+  static constexpr int kSettleWaitCycles = 25;
+  static constexpr int kSettleCollectN = 60;
+  static constexpr double kSettleStepEps = 5e-5;
+  static constexpr double kSettleDeadbandRad = 0.0087;   // ~0.5 deg
+  static constexpr double kSettleMaxCorrRad = 0.35;      // ~20 deg : au-dela = aberrant
+  static constexpr int kSettleMaxCorrections = 2;
 };
 
 }  // namespace roby_hardware

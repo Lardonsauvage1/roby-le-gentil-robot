@@ -17,7 +17,7 @@ import signal
 
 STEP_PIN = 17
 DIR_PIN = 27
-GPIO_CHIP = "/dev/gpiochip4"
+GPIO_CHIP = "/dev/gpiochip0"
 
 # Graceful shutdown on Ctrl+C
 shutdown = False

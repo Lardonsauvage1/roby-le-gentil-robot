@@ -61,12 +61,12 @@
                     <param name="pca9685_address">0x40</param>
                     <!-- Coupling axes 2/3 ENABLED -->
                     <param name="coupling_enabled">true</param>
-                    <param name="coupling_ratio_m2_num">6000</param>
+                    <param name="coupling_ratio_m2_num">-6000</param>
                     <param name="coupling_ratio_m2_den">45056</param>
                     <!-- Encoder feedback (RS-485 + AS5048A) — option B
                          /joint_states reflete la vraie position physique mesuree.
                          Inversion par moteur calibree empiriquement le 2026-05-30. -->
-                    <param name="encoder_enabled">true</param>
+                    <param name="encoder_enabled">false</param>
                     <param name="encoder_port">/dev/ttyAMA0</param>
                     <param name="encoder_baud">115200</param>
                     <param name="encoder_de_re_pin">26</param>
@@ -92,7 +92,7 @@
                          propre (spr.FILT<0.7 deg, 0% outliers) sur les 3 => TOUS GO.
                          Filtre runtime C++ (rejet 20deg vs derniere acceptee + median
                          N=5) verifie equivalent a la validation. Depart kp=0.1. -->
-                    <param name="joint_2_pid_kp">0.15</param>
+                    <param name="joint_2_pid_kp">0.0</param>
                     <param name="joint_2_pid_ki">0.0</param>
                     <param name="joint_2_pid_kd">0.0</param>
                     <param name="joint_2_pid_i_clamp">0.05</param>
@@ -121,7 +121,7 @@
                          couplage (motor_3 compense la cible EFFECTIVE de joint_2
                          = cmd + correction PID) supprime la vibration parasite
                          couplee. db=0.04, ramp=0.02. -->
-                    <param name="joint_3_pid_kp">0.15</param>
+                    <param name="joint_3_pid_kp">0.0</param>
                     <param name="joint_3_pid_ki">0.0</param>
                     <param name="joint_3_pid_kd">0.0</param>
                     <param name="joint_3_pid_i_clamp">0.05</param>

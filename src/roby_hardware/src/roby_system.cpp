@@ -5,6 +5,7 @@
 #include <limits>
 #include <sstream>
 #include <thread>
+#include <algorithm>
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
@@ -373,6 +374,20 @@ hardware_interface::CallbackReturn RobySystem::on_activate(
     joints_[i].pid.reset();
   }
   cycles_since_command_ = 0;
+
+  // Partie B : init etat de recalage au settle.
+  prev_commands_.assign(joints_.size(), 0.0);
+  prev_step_pos_.assign(joints_.size(), 0.0);
+  settle_samples_.assign(joints_.size(), std::vector<double>());
+  for (size_t i = 0; i < joints_.size(); ++i) {
+    prev_commands_[i] = joints_[i].command;
+    if (stepper_index_[i] >= 0) {
+      prev_step_pos_[i] = steppers_[stepper_index_[i]]->get_position_rad();
+    }
+  }
+  settle_counter_ = 0;
+  settle_phase_ = 0;
+  settle_correction_count_ = 0;
   // --- Reglage PID live (tuning) : topic /roby/pid_gains -------------------
   // Noeud + thread d'execution dedie pour pouvoir changer kp/ki/kd/deadband a
   // chaud sans rebuild/relaunch. Message Float64MultiArray :
@@ -513,7 +528,20 @@ hardware_interface::return_type RobySystem::read(
         }
       }
       if (!used_encoder) {
-        joints_[i].position = steppers_[stepper_index_[i]]->get_position_rad();
+        double raw = steppers_[stepper_index_[i]]->get_position_rad();
+        // Open-loop : le compteur de pas de joint_3 est en repere MOTEUR
+        // (write() a applique la compensation couplage). On refait l'inverse
+        // pour que /joint_states donne l'angle AXE reel. (Closed-loop :
+        // l'encodeur donne deja l'angle axe, ce bloc n'est pas atteint.)
+        if (coupling_enabled_ && joints_[i].name == "joint_3") {
+          for (size_t j = 0; j < joints_.size(); ++j) {
+            if (joints_[j].name == "joint_2") {
+              raw += joints_[j].position * (coupling_ratio_m2_ / coupling_ratio_m3_);
+              break;
+            }
+          }
+        }
+        joints_[i].position = raw;
       }
     } else if (joints_[i].type == JointType::SERVO && servo_index_[i] >= 0) {
       double angle_deg = servos_[servo_index_[i]]->get_angle_deg();
@@ -528,11 +556,105 @@ hardware_interface::return_type RobySystem::read(
   return hardware_interface::return_type::OK;
 }
 
+namespace {
+double settle_median(std::vector<double> v)
+{
+  if (v.empty()) return 0.0;
+  std::sort(v.begin(), v.end());
+  size_t n = v.size();
+  return (n % 2) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+}
+}  // namespace
+
+void RobySystem::settle_recalibrate()
+{
+  if (!encoder_enabled_) return;
+
+  // 1) Changement de consigne -> reset complet.
+  bool cmd_changed = false;
+  for (size_t i = 0; i < joints_.size(); ++i) {
+    if (std::abs(joints_[i].command - prev_commands_[i]) > 1e-4) cmd_changed = true;
+    prev_commands_[i] = joints_[i].command;
+  }
+  if (cmd_changed) {
+    settle_counter_ = 0; settle_phase_ = 0; settle_correction_count_ = 0;
+    for (auto & s : settle_samples_) s.clear();
+  }
+
+  // 2) Mouvement (espace-pas) sur joint_2/3 -> pas stabilise.
+  bool moving = false;
+  for (size_t i = 0; i < joints_.size(); ++i) {
+    if (stepper_index_[i] < 0) continue;
+    double sp = steppers_[stepper_index_[i]]->get_position_rad();
+    bool is_target = (joints_[i].name == "joint_2" || joints_[i].name == "joint_3");
+    if (is_target && std::abs(sp - prev_step_pos_[i]) > kSettleStepEps) moving = true;
+    prev_step_pos_[i] = sp;
+  }
+  if (moving) {
+    settle_counter_ = 0;
+    if (settle_phase_ == 1) { for (auto & s : settle_samples_) s.clear(); }
+    settle_phase_ = 0;
+    return;
+  }
+
+  // 3) Stable + immobile : attendre avant de collecter.
+  settle_counter_++;
+  if (settle_counter_ < kSettleWaitCycles) return;
+  settle_phase_ = 1;
+
+  // 4) Collecte des lectures encodeur (espace-joint) de joint_2/3.
+  size_t collected = 0;
+  for (size_t i = 0; i < joints_.size(); ++i) {
+    if (joints_[i].name == "joint_2" || joints_[i].name == "joint_3") {
+      settle_samples_[i].push_back(joints_[i].position);
+      if (joints_[i].name == "joint_2") collected = settle_samples_[i].size();
+    }
+  }
+  if (collected < static_cast<size_t>(kSettleCollectN)) return;
+
+  // 5) Grosse mediane -> correction one-shot (recalage compteur de pas).
+  if (settle_correction_count_ < kSettleMaxCorrections) {
+    double med_j2 = 0.0; bool have_j2 = false;
+    for (size_t i = 0; i < joints_.size(); ++i) {
+      if (joints_[i].name == "joint_2") { med_j2 = settle_median(settle_samples_[i]); have_j2 = true; }
+    }
+    for (size_t i = 0; i < joints_.size(); ++i) {
+      if (stepper_index_[i] < 0) continue;
+      if (joints_[i].name != "joint_2" && joints_[i].name != "joint_3") continue;
+      double median = settle_median(settle_samples_[i]);
+      double error = joints_[i].command - median;
+      if (std::abs(error) >= kSettleMaxCorrRad) {
+        RCLCPP_WARN(rclcpp::get_logger("RobySystem"),
+          "Settle %s : ecart median aberrant (%.1f deg) -> abstention.",
+          joints_[i].name.c_str(), error * 180.0 / M_PI);
+        continue;
+      }
+      if (std::abs(error) <= kSettleDeadbandRad) continue;
+      double motor_side = median;
+      if (coupling_enabled_ && joints_[i].name == "joint_3" && have_j2) {
+        motor_side = compensate_coupling(median, med_j2);
+      }
+      steppers_[stepper_index_[i]]->set_position_rad(motor_side);
+      RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
+        "Settle %s : recalage #%d, ecart %.2f deg -> correction.",
+        joints_[i].name.c_str(), settle_correction_count_ + 1, error * 180.0 / M_PI);
+    }
+    settle_correction_count_++;
+  }
+
+  // Re-armer pour un eventuel settle suivant (apres la correction).
+  settle_counter_ = 0; settle_phase_ = 0;
+  for (auto & s : settle_samples_) s.clear();
+}
+
 hardware_interface::return_type RobySystem::write(
   const rclcpp::Time & /*time*/, const rclcpp::Duration & period)
 {
   double dt = period.seconds();
   if (dt <= 0.0) dt = 0.01;  // fallback 100Hz (coherent avec read())
+
+  // Partie B : recalage one-shot au settle (joint_2/3) AVANT prepare_move.
+  settle_recalibrate();
 
   // Communication watchdog: reset when any command differs from position
   // (the controller continuously writes to joints_[i].command)
@@ -651,7 +773,7 @@ hardware_interface::return_type RobySystem::write(
     if (total_steps > 0) {
       // Calculate inter-step delay to spread pulses over the 10ms cycle
       // Spread steps over the control cycle
-      int cycle_us = 10000;  // 100Hz
+      int cycle_us = 6000;   // busy-wait : etale sur 6ms, marge ~3.5ms sous le cycle 10ms
       int inter_step_us = static_cast<int>(cycle_us / total_steps) - (2 * 3);
       if (inter_step_us < 0) inter_step_us = 0;
       if (inter_step_us > 2000) inter_step_us = 2000;
@@ -663,7 +785,12 @@ hardware_interface::return_type RobySystem::write(
           if (s->step_once()) {
             any_active = true;
             if (inter_step_us > 0) {
-              std::this_thread::sleep_for(std::chrono::microseconds(inter_step_us));
+              // Busy-wait au lieu de sleep_for : sans priorite RT, sleep_for
+              // deborde de ~370us/appel (latence de reveil) => write() explose.
+              // L attente active est precise a la us => pas d overrun.
+              auto t_end = std::chrono::steady_clock::now() +
+                           std::chrono::microseconds(inter_step_us);
+              while (std::chrono::steady_clock::now() < t_end) { /* spin */ }
             }
           }
         }
@@ -684,20 +811,18 @@ hardware_interface::return_type RobySystem::write(
   std::vector<double> actual, commanded;
   for (size_t i = 0; i < joints_.size(); ++i) {
     actual.push_back(joints_[i].position);
-    if (!encoder_enabled_ && coupling_enabled_ && joints_[i].name == "joint_3") {
-      double compensated = joints_[i].command;
-      for (size_t j = 0; j < joints_.size(); ++j) {
-        if (joints_[j].name == "joint_2") {
-          compensated = compensate_coupling(joints_[i].command, joints_[j].position);
-          break;
-        }
-      }
-      commanded.push_back(compensated);
-    } else {
-      commanded.push_back(joints_[i].command);
-    }
+    // Depuis le fix read() : joint_3 est lu en ESPACE-JOINT meme en open-loop
+    // (inverse-couplage applique a la lecture). actual est donc TOUJOURS en
+    // espace-joint => on compare a la commande brute, SANS recompenser, sinon
+    // fausse deviation = terme de couplage (~21 deg) => coupure parasite.
+    commanded.push_back(joints_[i].command);
   }
-  if (safety_.check_all_deviations(actual, commanded)) {
+  // Watchdog deviation : UNIQUEMENT en boucle fermee (encodeur). En open-loop,
+  // actual=compteur de pas qui rattrape toujours la consigne avec du RETARD
+  // (moteur lent) => deviation = simple retard, pas un defaut => sinon coupure
+  // parasite sur les grands mouvements. Sans encodeur on ne peut de toute facon
+  // pas detecter un vrai decrochage.
+  if (encoder_enabled_ && safety_.check_all_deviations(actual, commanded)) {
     critical_deviation_streak_++;
     // Log which joint is deviating for debugging (chaque cycle de la serie)
     for (size_t i = 0; i < actual.size() && i < commanded.size(); ++i) {
