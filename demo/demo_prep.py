@@ -112,6 +112,10 @@ def main():
     try:
         n.run()
     finally:
-        n.destroy_node(); rclpy.shutdown()
+        try:
+            n.destroy_node(); rclpy.shutdown()
+        except Exception:
+            pass
+    os._exit(0)   # sortie immediate (evite le hang rclpy au shutdown)
 
 main()
