@@ -225,6 +225,36 @@ bool StepperDriver::step_once()
   return true;
 }
 
+void StepperDriver::raise_step()
+{
+  if (config_.mock || prepared_remaining_ <= 0) {
+    return;
+  }
+#ifdef HAS_GPIOD
+  if (step_line_) {
+    gpiod_line_set_value(step_line_, 1);
+  }
+#endif
+}
+
+void StepperDriver::lower_step_and_commit()
+{
+  if (prepared_remaining_ <= 0) {
+    return;
+  }
+#ifdef HAS_GPIOD
+  if (!config_.mock && step_line_) {
+    gpiod_line_set_value(step_line_, 0);
+  }
+#endif
+  prepared_remaining_--;
+  if (prepared_forward_) {
+    current_steps_++;
+  } else {
+    current_steps_--;
+  }
+}
+
 void StepperDriver::set_direction(bool forward)
 {
   if (direction_initialized_ && forward == current_direction_) {
@@ -240,6 +270,10 @@ void StepperDriver::set_direction(bool forward)
     int dir_val = forward ? 1 : 0;
     if (config_.inverted) dir_val = !dir_val;
     gpiod_line_set_value(dir_line_, dir_val);
+    // CL86Y : DIR doit etre stable >=5us avant la 1ere impulsion PUL. Busy-wait
+    // DIR_SETUP_US, uniquement lors d un changement de sens (cout negligeable).
+    { auto e = std::chrono::steady_clock::now() + std::chrono::microseconds(DIR_SETUP_US);
+      while (std::chrono::steady_clock::now() < e) { } }
   }
 #endif
 }

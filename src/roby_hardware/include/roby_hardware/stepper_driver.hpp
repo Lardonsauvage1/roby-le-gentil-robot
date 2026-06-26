@@ -50,6 +50,16 @@ public:
   /// Get remaining steps from last prepare_move().
   int remaining_steps() const { return prepared_remaining_; }
 
+  /// Pulse groupe : reste-t-il un pas prepare a emettre ?
+  bool has_pending_step() const { return prepared_remaining_ > 0; }
+
+  /// Pulse groupe : lever la ligne STEP (sans attente). Appeler pour tous les
+  /// moteurs en attente, puis UN busy-wait partage, puis lower_step_and_commit().
+  void raise_step();
+
+  /// Pulse groupe : baisser la ligne STEP + decrementer + maj compteur de pas.
+  void lower_step_and_commit();
+
   /// Get current position in radians (from step counter).
   double get_position_rad() const;
 
@@ -80,6 +90,7 @@ private:
 
   static constexpr int DIRECTION_CHANGE_DELAY_MS = 50;
   static constexpr int PULSE_WIDTH_US = 3;  // slightly above 2µs minimum
+  static constexpr int DIR_SETUP_US = 10;   // CL86Y: DIR stable >=5us avant la 1ere impulsion PUL
 
   int prepared_remaining_ = 0;
   bool prepared_forward_ = true;

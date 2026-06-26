@@ -769,36 +769,37 @@ hardware_interface::return_type RobySystem::write(
     }
   }
 
-  // Interleave step pulses across all active steppers for smooth motion
+  // Pulse groupe (anti-overrun multi-axes, 2026-06-26) : a chaque passe on leve
+  // ENSEMBLE les lignes STEP des moteurs ayant un pas en attente, UN busy-wait
+  // partage (largeur d impulsion), puis on baisse + commit ensemble. Supprime le
+  // 3x de spin CPU vs pulser chaque moteur separement (cf project_gpio_overrun).
   {
-    int total_steps = 0;
+    int max_steps_pass = 0;
     for (auto & s : steppers_) {
-      total_steps += s->remaining_steps();
+      int r = s->remaining_steps();
+      if (r > max_steps_pass) max_steps_pass = r;
     }
-    if (total_steps > 0) {
-      // Calculate inter-step delay to spread pulses over the 10ms cycle
-      // Spread steps over the control cycle
-      int cycle_us = 6000;   // busy-wait : etale sur 6ms, marge ~3.5ms sous le cycle 10ms
-      int inter_step_us = static_cast<int>(cycle_us / total_steps) - (2 * 3);
+    if (max_steps_pass > 0) {
+      int cycle_us = 6000;   // etale sur ~6ms, marge sous le cycle 10ms
+      int inter_step_us = static_cast<int>(cycle_us / max_steps_pass) - (2 * 3);
       if (inter_step_us < 0) inter_step_us = 0;
       if (inter_step_us > 2000) inter_step_us = 2000;
 
-      bool any_active = true;
-      while (any_active) {
-        any_active = false;
+      for (int pass = 0; pass < max_steps_pass; ++pass) {
+        bool any = false;
         for (auto & s : steppers_) {
-          if (s->step_once()) {
-            any_active = true;
-            if (inter_step_us > 0) {
-              // Busy-wait au lieu de sleep_for : sans priorite RT, sleep_for
-              // deborde de ~370us/appel (latence de reveil) => write() explose.
-              // L attente active est precise a la us => pas d overrun.
-              auto t_end = std::chrono::steady_clock::now() +
-                           std::chrono::microseconds(inter_step_us);
-              while (std::chrono::steady_clock::now() < t_end) { /* spin */ }
-            }
-          }
+          if (s->has_pending_step()) { s->raise_step(); any = true; }
         }
+        if (!any) break;
+        // largeur d impulsion HAUT, partagee entre tous les moteurs (busy-wait)
+        { auto e = std::chrono::steady_clock::now() + std::chrono::microseconds(3);
+          while (std::chrono::steady_clock::now() < e) { } }
+        for (auto & s : steppers_) {
+          if (s->has_pending_step()) s->lower_step_and_commit();
+        }
+        // largeur d impulsion BAS partagee + espacement inter-pas (busy-wait)
+        { auto e = std::chrono::steady_clock::now() + std::chrono::microseconds(3 + inter_step_us);
+          while (std::chrono::steady_clock::now() < e) { } }
       }
     }
   }
