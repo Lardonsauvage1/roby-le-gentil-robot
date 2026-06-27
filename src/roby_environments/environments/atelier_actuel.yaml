@@ -1,0 +1,28 @@
+# Environnement : atelier actuel
+# ------------------------------------------------------------------------------
+# Repère "world" = base du robot.  +X avant (vers le plan de travail),
+# +Y gauche, +Z haut.  Origine au centre de la base, au niveau du support.
+# Pour chaque obstacle :
+#   box      : size: [X, Y, Z]  = dimensions TOTALES (m)
+#   cylinder : radius: R, height: H  (m)   |   sphere : radius: R
+#   pose: [x, y, z]  = position du CENTRE (m)
+#   rpy:  [r, p, y]  = orientation (rad), optionnel (défaut 0 0 0)
+#   color:[r, g, b, a] = couleur 0..1 (a=opacité), optionnel
+#
+# ⚠️ VALEURS PLACEHOLDER — À REMPLACER PAR LES MESURES RÉELLES.
+# ------------------------------------------------------------------------------
+frame: world
+objects:
+  # Plan de travail devant le robot  (descendu de 8cm) — MARRON
+  - {name: plan_travail, type: box, size: [1.30, 0.76, 0.75], pose: [0.3925, 0.1625, -0.565], color: [0.80, 0.62, 0.42, 1.0]}
+
+  # Armoire électrique derrière — ROUGE = zone interdite (face basse alignée au plan de travail, face haute inchangée à +0.120)
+  - {name: armoire_elec, type: box, size: [0.60, 1.00, 1.06], pose: [-0.5575, 0.1625, -0.410], color: [0.90, 0.10, 0.10, 0.55]}
+
+  # Socle / base physique du robot  (sommet à 8cm sous la base de section 1) — MARRON CLAIR
+  - {name: base_robot,   type: box, size: [0.515, 0.875, 0.13], pose: [0.00, 0.0925, -0.125], color: [0.80, 0.62, 0.42, 1.0]}
+
+  # Cylindre sous l'origine : Ø27cm (r=0.135), h=8cm, centre 4cm sous l'origine — MARRON CLAIR
+  - {name: cylindre_origine, type: cylinder, radius: 0.135, height: 0.08, pose: [0.00, 0.00, -0.04], color: [0.80, 0.62, 0.42, 1.0]}
+
+ 
