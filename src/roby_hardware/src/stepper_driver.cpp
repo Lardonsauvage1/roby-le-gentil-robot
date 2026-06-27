@@ -231,7 +231,7 @@ void StepperDriver::raise_step()
     return;
   }
 #ifdef HAS_GPIOD
-  if (step_line_) {
+  if (!dry_run_ && step_line_) {
     gpiod_line_set_value(step_line_, 1);
   }
 #endif
@@ -243,7 +243,7 @@ void StepperDriver::lower_step_and_commit()
     return;
   }
 #ifdef HAS_GPIOD
-  if (!config_.mock && step_line_) {
+  if (!config_.mock && !dry_run_ && step_line_) {
     gpiod_line_set_value(step_line_, 0);
   }
 #endif
@@ -266,7 +266,7 @@ void StepperDriver::set_direction(bool forward)
   last_direction_change_ = std::chrono::steady_clock::now();
 
 #ifdef HAS_GPIOD
-  if (dir_line_) {
+  if (!dry_run_ && dir_line_) {
     int dir_val = forward ? 1 : 0;
     if (config_.inverted) dir_val = !dir_val;
     gpiod_line_set_value(dir_line_, dir_val);
@@ -285,7 +285,7 @@ void StepperDriver::pulse_step()
   }
 
 #ifdef HAS_GPIOD
-  if (step_line_) {
+  if (!dry_run_ && step_line_) {
     // Busy-wait pour la largeur d impulsion : sans priorite RT, sleep_for(3us)
     // deborde a ~130us => chaque pas coute ~260us => write() explose (overrun
     // RT). L attente active est precise a la us.

@@ -89,6 +89,7 @@ private:
   std::vector<JointInfo> joints_;
   std::vector<std::unique_ptr<StepperDriver>> steppers_;
   std::vector<std::unique_ptr<ServoDriver>> servos_;
+  bool dry_run_ = false;
   SafetyMonitor safety_;
 
   // Coupling parameters

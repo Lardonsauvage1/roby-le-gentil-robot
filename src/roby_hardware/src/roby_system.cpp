@@ -6,6 +6,7 @@
 #include <sstream>
 #include <thread>
 #include <algorithm>
+#include <cstdlib>
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
@@ -76,6 +77,10 @@ hardware_interface::CallbackReturn RobySystem::on_init(
   std::string i2c_bus = get_param("i2c_bus", "/dev/i2c-1");
   int pca_addr = get_param_int("pca9685_address", 0x40);
 
+  // Dry-run : si ROBY_DRY_RUN defini, AUCUNE impulsion GPIO (test sans moteurs).
+  dry_run_ = (std::getenv("ROBY_DRY_RUN") != nullptr);
+  if (dry_run_) RCLCPP_WARN(rclcpp::get_logger("RobySystem"), "*** DRY-RUN actif : aucune impulsion GPIO ***");
+
   // Coupling
   coupling_enabled_ = get_param_bool("coupling_enabled", false);
   if (coupling_enabled_) {
@@ -141,6 +146,7 @@ hardware_interface::CallbackReturn RobySystem::on_init(
       }
       stepper->set_position_rad(joints_[i].position);
 
+      stepper->set_dry_run(dry_run_);
       stepper_index_[i] = static_cast<int>(steppers_.size());
       steppers_.push_back(std::move(stepper));
 
@@ -349,24 +355,27 @@ hardware_interface::CallbackReturn RobySystem::on_activate(
         joints_[i].position = pos.value();
       }
     }
-    // Aligner le step counter de chaque stepper avec sa position MOTOR-SIDE
-    // (apres compensation du couplage pour joint_3). Sinon le 1er write voit
-    // un delta enorme entre stepper.current_steps_ (=0 ou stale) et la cmd
-    // compensee, et envoie des steps parasites pendant plusieurs cycles.
-    for (size_t i = 0; i < joints_.size(); ++i) {
-      if (stepper_index_[i] < 0) continue;
-      double motor_side_rad = joints_[i].position;
-      if (coupling_enabled_ && joints_[i].name == "joint_3") {
-        for (size_t j = 0; j < joints_.size(); ++j) {
-          if (joints_[j].name == "joint_2") {
-            motor_side_rad = compensate_coupling(joints_[i].position, joints_[j].position);
-            break;
-          }
+  }
+
+  // Aligner le step counter de chaque stepper avec sa position MOTOR-SIDE
+  // (apres compensation du couplage pour joint_3). DOIT tourner TOUJOURS
+  // (encoder ON ou OFF). Avant, ce bloc etait enferme dans le if(encoder) :
+  // encoder OFF + pose depart non nulle => compteur joint_3 non-couple alors
+  // que write() commande couple => mismatch = terme de couplage => runaway au
+  // demarrage (slew violent). Fix 2026-06-27 (diagnostic dry_run).
+  for (size_t i = 0; i < joints_.size(); ++i) {
+    if (stepper_index_[i] < 0) continue;
+    double motor_side_rad = joints_[i].position;
+    if (coupling_enabled_ && joints_[i].name == "joint_3") {
+      for (size_t j = 0; j < joints_.size(); ++j) {
+        if (joints_[j].name == "joint_2") {
+          motor_side_rad = compensate_coupling(joints_[i].position, joints_[j].position);
+          break;
         }
       }
-      if (steppers_[stepper_index_[i]]) {
-        steppers_[stepper_index_[i]]->set_position_rad(motor_side_rad);
-      }
+    }
+    if (steppers_[stepper_index_[i]]) {
+      steppers_[stepper_index_[i]]->set_position_rad(motor_side_rad);
     }
   }
 
@@ -761,7 +770,7 @@ hardware_interface::return_type RobySystem::write(
 
     } else if (joints_[i].type == JointType::SERVO && servo_index_[i] >= 0) {
       double angle_deg = joints_[i].servo_offset_deg + ServoDriver::rad_to_deg(cmd);
-      servos_[servo_index_[i]]->set_angle_deg(angle_deg);
+      if (!dry_run_) servos_[servo_index_[i]]->set_angle_deg(angle_deg);
 
     } else {
       // MOCK: directly set position

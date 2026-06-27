@@ -111,6 +111,15 @@ void ServoDriver::set_angle_deg(double angle_deg)
   // ON at tick 0, OFF at (pulse_us / 20000) * 4096
   uint16_t off_tick = static_cast<uint16_t>((pulse_us / 20000.0) * 4096.0);
 
+  // Ecriture I2C seulement si la consigne PWM change (anti-contention bus).
+  // Incident 2026-06-27 : ecrire CH0/CH1 a 100Hz pendant que les nodes
+  // verrou/pince ecrivent CH2/CH3 => collision I2C => bus fige. On ne touche
+  // le bus que quand l angle change vraiment.
+  if (off_tick == last_off_tick_) {
+    return;
+  }
+  last_off_tick_ = off_tick;
+
   write_channel(config_.channel, 0, off_tick);
 }
 

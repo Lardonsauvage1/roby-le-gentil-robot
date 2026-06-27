@@ -59,6 +59,7 @@ private:
 
   ServoConfig config_;
   double current_angle_deg_ = 0.0;
+  uint16_t last_off_tick_ = 0xFFFF;   // sentinelle : force la 1re ecriture (init)
   int i2c_fd_ = -1;
   bool pca9685_initialized_ = false;
 

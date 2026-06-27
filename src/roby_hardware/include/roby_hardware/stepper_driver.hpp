@@ -69,6 +69,9 @@ public:
   /// Set current position without moving (for initialization).
   void set_position_rad(double rad);
 
+  /// Mode test : aucune impulsion GPIO (moteurs muets), comptage conserve.
+  void set_dry_run(bool v) { dry_run_ = v; }
+
   /// Convert radians to steps (axis-side radians to motor steps).
   int64_t rad_to_steps(double rad) const;
 
@@ -84,6 +87,7 @@ private:
 
   StepperConfig config_;
   int64_t current_steps_ = 0;
+  bool dry_run_ = false;   // true => pas de gpiod_line_set_value (test sans moteurs)
   bool current_direction_ = true;  // true = forward
   bool direction_initialized_ = false;
   std::chrono::steady_clock::time_point last_direction_change_;
