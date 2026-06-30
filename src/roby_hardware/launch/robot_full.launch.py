@@ -120,13 +120,19 @@ def generate_launch_description():
     # encaisse 40deg/0.8s sans trip, debounce absorbe le self-lag ; deflexion
     # inertielle j2/3 seulement aux grandes amplitudes rapides). Plus vite =
     # stepper plus rapide, pas un reglage soft.
-    for joint in ["joint_1", "joint_2", "joint_3"]:
+    for joint in ["joint_2", "joint_3"]:
         limits[joint] = {
             "has_velocity_limits": True,
-            "max_velocity": 0.1,
+            "max_velocity": 3.2,
             "has_acceleration_limits": True,
-            "max_acceleration": 0.2,
+            "max_acceleration": 6.4,
         }
+    limits["joint_1"] = {
+        "has_velocity_limits": True,
+        "max_velocity": 1.6,
+        "has_acceleration_limits": True,
+        "max_acceleration": 2.0,
+    }
     for joint in ["joint_4", "joint_5"]:
         limits[joint] = {
             "has_velocity_limits": True,
