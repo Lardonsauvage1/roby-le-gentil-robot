@@ -5,6 +5,8 @@
 #include <limits>
 #include <sstream>
 #include <thread>
+#include <algorithm>
+#include <cstdlib>
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
@@ -75,6 +77,10 @@ hardware_interface::CallbackReturn RobySystem::on_init(
   std::string i2c_bus = get_param("i2c_bus", "/dev/i2c-1");
   int pca_addr = get_param_int("pca9685_address", 0x40);
 
+  // Dry-run : si ROBY_DRY_RUN defini, AUCUNE impulsion GPIO (test sans moteurs).
+  dry_run_ = (std::getenv("ROBY_DRY_RUN") != nullptr);
+  if (dry_run_) RCLCPP_WARN(rclcpp::get_logger("RobySystem"), "*** DRY-RUN actif : aucune impulsion GPIO ***");
+
   // Coupling
   coupling_enabled_ = get_param_bool("coupling_enabled", false);
   if (coupling_enabled_) {
@@ -140,6 +146,7 @@ hardware_interface::CallbackReturn RobySystem::on_init(
       }
       stepper->set_position_rad(joints_[i].position);
 
+      stepper->set_dry_run(dry_run_);
       stepper_index_[i] = static_cast<int>(steppers_.size());
       steppers_.push_back(std::move(stepper));
 
@@ -172,6 +179,8 @@ hardware_interface::CallbackReturn RobySystem::on_init(
       cfg.angle_max_deg = get_param_double(joint.name + "_angle_max_deg", 180.0);
       cfg.angle_init_deg = get_param_double(joint.name + "_angle_init_deg", 90.0);
       cfg.inverted = get_param_bool(joint.name + "_inverted", false);
+      joints_[i].servo_offset_deg =
+        get_param_double(joint.name + "_servo_offset_deg", cfg.angle_init_deg);
 
 #ifdef __linux__
       // Only try real I2C if the device exists
@@ -208,13 +217,18 @@ hardware_interface::CallbackReturn RobySystem::on_init(
       // The actual limits come from the URDF <limit> tag, available via joint info
     }
 
-    // Set velocity and deviation thresholds based on joint type
+    // Set velocity and deviation thresholds based on joint type.
+    // max_accel_rad_per_tick2 limite la variation de vitesse par cycle => un
+    // rattrapage apres overrun RT rampe au lieu de sauter (anti "petit saut").
+    // ~1/10 de la vitesse max => atteint la vitesse max en ~10 cycles (100ms).
     if (joints_[i].type == JointType::STEPPER) {
       sc.max_velocity_rad_per_tick = 3.0 * DEG_TO_RAD;   // 3°/tick
+      sc.max_accel_rad_per_tick2 = 0.3 * DEG_TO_RAD;      // 0.3°/tick²
       sc.warning_deviation_rad = 5.0 * DEG_TO_RAD;        // 5°
       sc.critical_deviation_rad = 15.0 * DEG_TO_RAD;      // 15°
     } else {
       sc.max_velocity_rad_per_tick = 8.0 * DEG_TO_RAD;   // 8°/tick
+      sc.max_accel_rad_per_tick2 = 0.8 * DEG_TO_RAD;      // 0.8°/tick²
       sc.warning_deviation_rad = 8.0 * DEG_TO_RAD;        // 8°
       sc.critical_deviation_rad = 20.0 * DEG_TO_RAD;      // 20°
     }
@@ -341,24 +355,27 @@ hardware_interface::CallbackReturn RobySystem::on_activate(
         joints_[i].position = pos.value();
       }
     }
-    // Aligner le step counter de chaque stepper avec sa position MOTOR-SIDE
-    // (apres compensation du couplage pour joint_3). Sinon le 1er write voit
-    // un delta enorme entre stepper.current_steps_ (=0 ou stale) et la cmd
-    // compensee, et envoie des steps parasites pendant plusieurs cycles.
-    for (size_t i = 0; i < joints_.size(); ++i) {
-      if (stepper_index_[i] < 0) continue;
-      double motor_side_rad = joints_[i].position;
-      if (coupling_enabled_ && joints_[i].name == "joint_3") {
-        for (size_t j = 0; j < joints_.size(); ++j) {
-          if (joints_[j].name == "joint_2") {
-            motor_side_rad = compensate_coupling(joints_[i].position, joints_[j].position);
-            break;
-          }
+  }
+
+  // Aligner le step counter de chaque stepper avec sa position MOTOR-SIDE
+  // (apres compensation du couplage pour joint_3). DOIT tourner TOUJOURS
+  // (encoder ON ou OFF). Avant, ce bloc etait enferme dans le if(encoder) :
+  // encoder OFF + pose depart non nulle => compteur joint_3 non-couple alors
+  // que write() commande couple => mismatch = terme de couplage => runaway au
+  // demarrage (slew violent). Fix 2026-06-27 (diagnostic dry_run).
+  for (size_t i = 0; i < joints_.size(); ++i) {
+    if (stepper_index_[i] < 0) continue;
+    double motor_side_rad = joints_[i].position;
+    if (coupling_enabled_ && joints_[i].name == "joint_3") {
+      for (size_t j = 0; j < joints_.size(); ++j) {
+        if (joints_[j].name == "joint_2") {
+          motor_side_rad = compensate_coupling(joints_[i].position, joints_[j].position);
+          break;
         }
       }
-      if (steppers_[stepper_index_[i]]) {
-        steppers_[stepper_index_[i]]->set_position_rad(motor_side_rad);
-      }
+    }
+    if (steppers_[stepper_index_[i]]) {
+      steppers_[stepper_index_[i]]->set_position_rad(motor_side_rad);
     }
   }
 
@@ -372,6 +389,19 @@ hardware_interface::CallbackReturn RobySystem::on_activate(
   }
   cycles_since_command_ = 0;
 
+  // Partie B : init etat de recalage au settle.
+  prev_commands_.assign(joints_.size(), 0.0);
+  prev_step_pos_.assign(joints_.size(), 0.0);
+  settle_samples_.assign(joints_.size(), std::vector<double>());
+  for (size_t i = 0; i < joints_.size(); ++i) {
+    prev_commands_[i] = joints_[i].command;
+    if (stepper_index_[i] >= 0) {
+      prev_step_pos_[i] = steppers_[stepper_index_[i]]->get_position_rad();
+    }
+  }
+  settle_counter_ = 0;
+  settle_phase_ = 0;
+  settle_correction_count_ = 0;
   // --- Reglage PID live (tuning) : topic /roby/pid_gains -------------------
   // Noeud + thread d'execution dedie pour pouvoir changer kp/ki/kd/deadband a
   // chaud sans rebuild/relaunch. Message Float64MultiArray :
@@ -383,6 +413,56 @@ hardware_interface::CallbackReturn RobySystem::on_activate(
     pid_sub_ = tuning_node_->create_subscription<std_msgs::msg::Float64MultiArray>(
       "/roby/pid_gains", 10,
       std::bind(&RobySystem::on_pid_gains, this, std::placeholders::_1));
+    // Verrou tete (/head_lock) + pince (/gripper) : sur le MEME noeud/thread que
+    // le tuning. Les callbacks posent une cible ; write() (thread RT) ecrit le bus.
+    head_lock_sub_ = tuning_node_->create_subscription<std_msgs::msg::Bool>(
+      "/head_lock", 10,
+      std::bind(&RobySystem::on_head_lock, this, std::placeholders::_1));
+    gripper_sub_ = tuning_node_->create_subscription<std_msgs::msg::Bool>(
+      "/gripper", 10,
+      std::bind(&RobySystem::on_gripper, this, std::placeholders::_1));
+    // Angle BRUT de la pince, pour regler le serrage a chaud sans rebuild :
+    //   ros2 topic pub --once /roby/gripper_deg std_msgs/msg/Float64 "{data: 76.0}"
+    gripper_deg_sub_ = tuning_node_->create_subscription<std_msgs::msg::Float64>(
+      "/roby/gripper_deg", 10,
+      std::bind(&RobySystem::on_gripper_deg, this, std::placeholders::_1));
+    // Instancie les servos verrou/pince (hors chaine cinematique). Re-init a
+    // chaque activation. angle_init : verrou=verrouille, pince=ouverte (etats surs).
+    // Calibre 2026-07-07 : 50 deg = VERROUILLE, 75 deg = DEVERROUILLE (inverse
+    // de l'ancienne note 2026-06-02 ; palonnier remonte). Surchargeable par param.
+    lock_locked_deg_    = get_param_double("head_lock_locked_deg", 50.0);
+    lock_unlocked_deg_  = get_param_double("head_lock_unlocked_deg", 75.0);
+    gripper_open_deg_   = get_param_double("gripper_open_deg", 120.0);
+    gripper_closed_deg_ = get_param_double("gripper_closed_deg", 55.0);
+    {
+      std::string i2c_bus = get_param("i2c_bus", "/dev/i2c-1");
+      int pca_addr = get_param_int("pca9685_address", 0x40);
+#ifdef __linux__
+      bool i2c_mock = (access(i2c_bus.c_str(), F_OK) != 0);
+#else
+      bool i2c_mock = true;
+#endif
+      ServoConfig lc;
+      lc.i2c_bus = i2c_bus; lc.pca9685_address = pca_addr;
+      lc.channel = get_param_int("head_lock_channel", 2);
+      lc.angle_min_deg = 0.0; lc.angle_max_deg = 180.0;
+      lc.angle_init_deg = lock_locked_deg_; lc.inverted = false; lc.mock = i2c_mock;
+      lock_servo_ = std::make_unique<ServoDriver>();
+      lock_servo_->init(lc);
+      ServoConfig gc;
+      gc.i2c_bus = i2c_bus; gc.pca9685_address = pca_addr;
+      gc.channel = get_param_int("gripper_channel", 3);
+      gc.angle_min_deg = 0.0; gc.angle_max_deg = 180.0;
+      gc.angle_init_deg = gripper_open_deg_; gc.inverted = false; gc.mock = i2c_mock;
+      gripper_servo_ = std::make_unique<ServoDriver>();
+      gripper_servo_->init(gc);
+    }
+    // La rampe part de l'etat init reel des servos (verrou verrouille, pince
+    // ouverte) : le 1er mouvement commande sera lisse depuis la vraie position.
+    lock_cmd_deg_ = lock_locked_deg_;
+    gripper_cmd_deg_ = gripper_open_deg_;
+    lock_target_deg_.store(kNoServoTarget);
+    gripper_target_deg_.store(kNoServoTarget);
     tuning_running_ = true;
     tuning_thread_ = std::thread([this]() {
       rclcpp::executors::SingleThreadedExecutor exec;
@@ -436,6 +516,41 @@ void RobySystem::on_pid_gains(const std_msgs::msg::Float64MultiArray::SharedPtr 
     "/roby/pid_gains : joint '%s' introuvable", target.c_str());
 }
 
+void RobySystem::on_head_lock(const std_msgs::msg::Bool::SharedPtr msg)
+{
+  // Ne fait QUE poser la cible ; l'ecriture I2C est faite par write() (thread RT),
+  // seul maitre du bus PCA9685 => jamais de collision.
+  lock_target_deg_.store(msg->data ? lock_locked_deg_ : lock_unlocked_deg_);
+  RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
+    "/head_lock -> %s (%.1f deg)", msg->data ? "VERROUILLE" : "DEVERROUILLE",
+    msg->data ? lock_locked_deg_ : lock_unlocked_deg_);
+}
+
+void RobySystem::on_gripper(const std_msgs::msg::Bool::SharedPtr msg)
+{
+  // data=true => pince FERMEE (cf. roby_fine_jog / roby_tool_pickup). Idem : la
+  // cible est posee ici, l'ecriture bus se fait dans write().
+  gripper_target_deg_.store(msg->data ? gripper_closed_deg_ : gripper_open_deg_);
+  RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
+    "/gripper -> %s (%.1f deg)", msg->data ? "FERME" : "OUVRE",
+    msg->data ? gripper_closed_deg_ : gripper_open_deg_);
+}
+
+void RobySystem::on_gripper_deg(const std_msgs::msg::Float64::SharedPtr msg)
+{
+  // Commande un angle BRUT (reglage du serrage). Borne dur : hors de cette plage
+  // le servo force en butee mecanique (provisoire, sous-dimensionne).
+  const double kMin = 40.0, kMax = 130.0;
+  double a = msg->data;
+  if (a < kMin || a > kMax) {
+    RCLCPP_WARN(rclcpp::get_logger("RobySystem"),
+      "/roby/gripper_deg %.1f REFUSE (hors [%.0f,%.0f])", a, kMin, kMax);
+    return;
+  }
+  gripper_target_deg_.store(a);
+  RCLCPP_INFO(rclcpp::get_logger("RobySystem"), "/roby/gripper_deg -> %.1f deg", a);
+}
+
 hardware_interface::CallbackReturn RobySystem::on_deactivate(
   const rclcpp_lifecycle::State & /*previous_state*/)
 {
@@ -446,6 +561,9 @@ hardware_interface::CallbackReturn RobySystem::on_deactivate(
       tuning_thread_.join();
     }
     pid_sub_.reset();
+    head_lock_sub_.reset();
+    gripper_sub_.reset();
+    gripper_deg_sub_.reset();
     tuning_node_.reset();
   }
 
@@ -456,6 +574,8 @@ hardware_interface::CallbackReturn RobySystem::on_deactivate(
   for (auto & s : servos_) {
     s->shutdown();
   }
+  if (lock_servo_) lock_servo_->shutdown();
+  if (gripper_servo_) gripper_servo_->shutdown();
   if (encoder_) {
     encoder_->shutdown();
     encoder_.reset();
@@ -512,11 +632,25 @@ hardware_interface::return_type RobySystem::read(
         }
       }
       if (!used_encoder) {
-        joints_[i].position = steppers_[stepper_index_[i]]->get_position_rad();
+        double raw = steppers_[stepper_index_[i]]->get_position_rad();
+        // Open-loop : le compteur de pas de joint_3 est en repere MOTEUR
+        // (write() a applique la compensation couplage). On refait l'inverse
+        // pour que /joint_states donne l'angle AXE reel. (Closed-loop :
+        // l'encodeur donne deja l'angle axe, ce bloc n'est pas atteint.)
+        if (coupling_enabled_ && joints_[i].name == "joint_3") {
+          for (size_t j = 0; j < joints_.size(); ++j) {
+            if (joints_[j].name == "joint_2") {
+              raw += joints_[j].position * (coupling_ratio_m2_ / coupling_ratio_m3_);
+              break;
+            }
+          }
+        }
+        joints_[i].position = raw;
       }
     } else if (joints_[i].type == JointType::SERVO && servo_index_[i] >= 0) {
       double angle_deg = servos_[servo_index_[i]]->get_angle_deg();
-      joints_[i].position = ServoDriver::deg_to_rad(angle_deg);
+      joints_[i].position =
+        ServoDriver::deg_to_rad(angle_deg - joints_[i].servo_offset_deg);
     }
     // MOCK joints: position = command (set in write)
 
@@ -526,11 +660,105 @@ hardware_interface::return_type RobySystem::read(
   return hardware_interface::return_type::OK;
 }
 
+namespace {
+double settle_median(std::vector<double> v)
+{
+  if (v.empty()) return 0.0;
+  std::sort(v.begin(), v.end());
+  size_t n = v.size();
+  return (n % 2) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+}
+}  // namespace
+
+void RobySystem::settle_recalibrate()
+{
+  if (!encoder_enabled_) return;
+
+  // 1) Changement de consigne -> reset complet.
+  bool cmd_changed = false;
+  for (size_t i = 0; i < joints_.size(); ++i) {
+    if (std::abs(joints_[i].command - prev_commands_[i]) > 1e-4) cmd_changed = true;
+    prev_commands_[i] = joints_[i].command;
+  }
+  if (cmd_changed) {
+    settle_counter_ = 0; settle_phase_ = 0; settle_correction_count_ = 0;
+    for (auto & s : settle_samples_) s.clear();
+  }
+
+  // 2) Mouvement (espace-pas) sur joint_2/3 -> pas stabilise.
+  bool moving = false;
+  for (size_t i = 0; i < joints_.size(); ++i) {
+    if (stepper_index_[i] < 0) continue;
+    double sp = steppers_[stepper_index_[i]]->get_position_rad();
+    bool is_target = (joints_[i].name == "joint_2" || joints_[i].name == "joint_3");
+    if (is_target && std::abs(sp - prev_step_pos_[i]) > kSettleStepEps) moving = true;
+    prev_step_pos_[i] = sp;
+  }
+  if (moving) {
+    settle_counter_ = 0;
+    if (settle_phase_ == 1) { for (auto & s : settle_samples_) s.clear(); }
+    settle_phase_ = 0;
+    return;
+  }
+
+  // 3) Stable + immobile : attendre avant de collecter.
+  settle_counter_++;
+  if (settle_counter_ < kSettleWaitCycles) return;
+  settle_phase_ = 1;
+
+  // 4) Collecte des lectures encodeur (espace-joint) de joint_2/3.
+  size_t collected = 0;
+  for (size_t i = 0; i < joints_.size(); ++i) {
+    if (joints_[i].name == "joint_2" || joints_[i].name == "joint_3") {
+      settle_samples_[i].push_back(joints_[i].position);
+      if (joints_[i].name == "joint_2") collected = settle_samples_[i].size();
+    }
+  }
+  if (collected < static_cast<size_t>(kSettleCollectN)) return;
+
+  // 5) Grosse mediane -> correction one-shot (recalage compteur de pas).
+  if (settle_correction_count_ < kSettleMaxCorrections) {
+    double med_j2 = 0.0; bool have_j2 = false;
+    for (size_t i = 0; i < joints_.size(); ++i) {
+      if (joints_[i].name == "joint_2") { med_j2 = settle_median(settle_samples_[i]); have_j2 = true; }
+    }
+    for (size_t i = 0; i < joints_.size(); ++i) {
+      if (stepper_index_[i] < 0) continue;
+      if (joints_[i].name != "joint_2" && joints_[i].name != "joint_3") continue;
+      double median = settle_median(settle_samples_[i]);
+      double error = joints_[i].command - median;
+      if (std::abs(error) >= kSettleMaxCorrRad) {
+        RCLCPP_WARN(rclcpp::get_logger("RobySystem"),
+          "Settle %s : ecart median aberrant (%.1f deg) -> abstention.",
+          joints_[i].name.c_str(), error * 180.0 / M_PI);
+        continue;
+      }
+      if (std::abs(error) <= kSettleDeadbandRad) continue;
+      double motor_side = median;
+      if (coupling_enabled_ && joints_[i].name == "joint_3" && have_j2) {
+        motor_side = compensate_coupling(median, med_j2);
+      }
+      steppers_[stepper_index_[i]]->set_position_rad(motor_side);
+      RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
+        "Settle %s : recalage #%d, ecart %.2f deg -> correction.",
+        joints_[i].name.c_str(), settle_correction_count_ + 1, error * 180.0 / M_PI);
+    }
+    settle_correction_count_++;
+  }
+
+  // Re-armer pour un eventuel settle suivant (apres la correction).
+  settle_counter_ = 0; settle_phase_ = 0;
+  for (auto & s : settle_samples_) s.clear();
+}
+
 hardware_interface::return_type RobySystem::write(
   const rclcpp::Time & /*time*/, const rclcpp::Duration & period)
 {
   double dt = period.seconds();
   if (dt <= 0.0) dt = 0.01;  // fallback 100Hz (coherent avec read())
+
+  // Partie B : recalage one-shot au settle (joint_2/3) AVANT prepare_move.
+  settle_recalibrate();
 
   // Communication watchdog: reset when any command differs from position
   // (the controller continuously writes to joints_[i].command)
@@ -631,8 +859,8 @@ hardware_interface::return_type RobySystem::write(
       steppers_[stepper_index_[i]]->prepare_move(cmd, max_steps);
 
     } else if (joints_[i].type == JointType::SERVO && servo_index_[i] >= 0) {
-      double angle_deg = ServoDriver::rad_to_deg(cmd);
-      servos_[servo_index_[i]]->set_angle_deg(angle_deg);
+      double angle_deg = joints_[i].servo_offset_deg + ServoDriver::rad_to_deg(cmd);
+      if (!dry_run_) servos_[servo_index_[i]]->set_angle_deg(angle_deg);
 
     } else {
       // MOCK: directly set position
@@ -640,31 +868,58 @@ hardware_interface::return_type RobySystem::write(
     }
   }
 
-  // Interleave step pulses across all active steppers for smooth motion
-  {
-    int total_steps = 0;
-    for (auto & s : steppers_) {
-      total_steps += s->remaining_steps();
+  // Verrou tete (CH2) + pince (CH3) : applique la cible posee par les callbacks
+  // /head_lock /gripper. Ecrit ICI (thread RT) => SEUL maitre du bus I2C, jamais
+  // depuis le callback => plus de collision (cf. incident servo_driver.cpp).
+  // set_angle_deg est write-on-change : aucun trafic bus tant que la cible ne
+  // change pas (donc aucun surcout RT au repos).
+  // Rampe douce vers la cible (kServoRampDeg/cycle) : evite l'a-coup/bourdonnement
+  // du servo sur un step brutal, surtout en cyclage rapide (ouvre/ferme rapproches).
+  // Ecritures I2C seulement pendant la rampe (write-on-change), puis 0 au repos.
+  if (!dry_run_) {
+    double lt = lock_target_deg_.load();
+    if (lt != kNoServoTarget && lock_servo_) {
+      lock_cmd_deg_ += std::clamp(lt - lock_cmd_deg_, -kServoRampDeg, kServoRampDeg);
+      lock_servo_->set_angle_deg(lock_cmd_deg_);
     }
-    if (total_steps > 0) {
-      // Calculate inter-step delay to spread pulses over the 10ms cycle
-      // Spread steps over the control cycle
-      int cycle_us = 10000;  // 100Hz
-      int inter_step_us = static_cast<int>(cycle_us / total_steps) - (2 * 3);
+    double gt = gripper_target_deg_.load();
+    if (gt != kNoServoTarget && gripper_servo_) {
+      gripper_cmd_deg_ += std::clamp(gt - gripper_cmd_deg_, -kServoRampDeg, kServoRampDeg);
+      gripper_servo_->set_angle_deg(gripper_cmd_deg_);
+    }
+  }
+
+  // Pulse groupe (anti-overrun multi-axes, 2026-06-26) : a chaque passe on leve
+  // ENSEMBLE les lignes STEP des moteurs ayant un pas en attente, UN busy-wait
+  // partage (largeur d impulsion), puis on baisse + commit ensemble. Supprime le
+  // 3x de spin CPU vs pulser chaque moteur separement (cf project_gpio_overrun).
+  {
+    int max_steps_pass = 0;
+    for (auto & s : steppers_) {
+      int r = s->remaining_steps();
+      if (r > max_steps_pass) max_steps_pass = r;
+    }
+    if (max_steps_pass > 0) {
+      int cycle_us = 6000;   // etale sur ~6ms, marge sous le cycle 10ms
+      int inter_step_us = static_cast<int>(cycle_us / max_steps_pass) - (2 * 3);
       if (inter_step_us < 0) inter_step_us = 0;
       if (inter_step_us > 2000) inter_step_us = 2000;
 
-      bool any_active = true;
-      while (any_active) {
-        any_active = false;
+      for (int pass = 0; pass < max_steps_pass; ++pass) {
+        bool any = false;
         for (auto & s : steppers_) {
-          if (s->step_once()) {
-            any_active = true;
-            if (inter_step_us > 0) {
-              std::this_thread::sleep_for(std::chrono::microseconds(inter_step_us));
-            }
-          }
+          if (s->has_pending_step()) { s->raise_step(); any = true; }
         }
+        if (!any) break;
+        // largeur d impulsion HAUT, partagee entre tous les moteurs (busy-wait)
+        { auto e = std::chrono::steady_clock::now() + std::chrono::microseconds(3);
+          while (std::chrono::steady_clock::now() < e) { } }
+        for (auto & s : steppers_) {
+          if (s->has_pending_step()) s->lower_step_and_commit();
+        }
+        // largeur d impulsion BAS partagee + espacement inter-pas (busy-wait)
+        { auto e = std::chrono::steady_clock::now() + std::chrono::microseconds(3 + inter_step_us);
+          while (std::chrono::steady_clock::now() < e) { } }
       }
     }
   }
@@ -682,20 +937,18 @@ hardware_interface::return_type RobySystem::write(
   std::vector<double> actual, commanded;
   for (size_t i = 0; i < joints_.size(); ++i) {
     actual.push_back(joints_[i].position);
-    if (!encoder_enabled_ && coupling_enabled_ && joints_[i].name == "joint_3") {
-      double compensated = joints_[i].command;
-      for (size_t j = 0; j < joints_.size(); ++j) {
-        if (joints_[j].name == "joint_2") {
-          compensated = compensate_coupling(joints_[i].command, joints_[j].command);
-          break;
-        }
-      }
-      commanded.push_back(compensated);
-    } else {
-      commanded.push_back(joints_[i].command);
-    }
+    // Depuis le fix read() : joint_3 est lu en ESPACE-JOINT meme en open-loop
+    // (inverse-couplage applique a la lecture). actual est donc TOUJOURS en
+    // espace-joint => on compare a la commande brute, SANS recompenser, sinon
+    // fausse deviation = terme de couplage (~21 deg) => coupure parasite.
+    commanded.push_back(joints_[i].command);
   }
-  if (safety_.check_all_deviations(actual, commanded)) {
+  // Watchdog deviation : UNIQUEMENT en boucle fermee (encodeur). En open-loop,
+  // actual=compteur de pas qui rattrape toujours la consigne avec du RETARD
+  // (moteur lent) => deviation = simple retard, pas un defaut => sinon coupure
+  // parasite sur les grands mouvements. Sans encodeur on ne peut de toute facon
+  // pas detecter un vrai decrochage.
+  if (encoder_enabled_ && safety_.check_all_deviations(actual, commanded)) {
     critical_deviation_streak_++;
     // Log which joint is deviating for debugging (chaque cycle de la serie)
     for (size_t i = 0; i < actual.size() && i < commanded.size(); ++i) {

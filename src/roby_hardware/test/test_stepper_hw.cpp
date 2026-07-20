@@ -33,7 +33,7 @@ int main()
   std::signal(SIGINT, signal_handler);
 
   printf("=== StepperDriver Hardware Test — Motor 1 ===\n");
-  printf("  GPIO chip: /dev/gpiochip4\n");
+  printf("  GPIO chip: /dev/gpiochip0\n");
   printf("  STEP pin:  17\n");
   printf("  DIR pin:   27\n");
   printf("  Gear:      16/85 (belt)\n");

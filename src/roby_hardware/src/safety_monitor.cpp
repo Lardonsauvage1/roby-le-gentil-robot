@@ -9,6 +9,7 @@ namespace roby_hardware
 void SafetyMonitor::init(const std::vector<JointSafetyConfig> & configs)
 {
   configs_ = configs;
+  prev_delta_.assign(configs_.size(), 0.0);
 }
 
 double SafetyMonitor::decel_factor(size_t joint_idx, double position_rad) const
@@ -39,7 +40,7 @@ double SafetyMonitor::decel_factor(size_t joint_idx, double position_rad) const
 }
 
 double SafetyMonitor::clamp_command(
-  size_t joint_idx, double current_rad, double command_rad) const
+  size_t joint_idx, double current_rad, double command_rad)
 {
   if (joint_idx >= configs_.size()) {
     return command_rad;
@@ -60,6 +61,19 @@ double SafetyMonitor::clamp_command(
 
   if (std::abs(delta) > max_delta) {
     delta = std::copysign(max_delta, delta);
+  }
+
+  // 4. Apply acceleration limit (0 = disabled). Limits how much the per-cycle
+  // delta (= velocity) can change from one cycle to the next, so that a
+  // catch-up after an RT overrun ramps smoothly instead of snapping (the
+  // "petit saut" felt on the steppers). Also softens normal move onsets.
+  if (cfg.max_accel_rad_per_tick2 > 0.0 && joint_idx < prev_delta_.size()) {
+    double dv = delta - prev_delta_[joint_idx];
+    double max_dv = cfg.max_accel_rad_per_tick2;
+    if (std::abs(dv) > max_dv) {
+      delta = prev_delta_[joint_idx] + std::copysign(max_dv, dv);
+    }
+    prev_delta_[joint_idx] = delta;
   }
 
   return current_rad + delta;

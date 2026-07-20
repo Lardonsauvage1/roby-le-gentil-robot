@@ -15,6 +15,8 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/state.hpp"
 #include "std_msgs/msg/float64_multi_array.hpp"
+#include "std_msgs/msg/float64.hpp"
+#include "std_msgs/msg/bool.hpp"
 
 #include "roby_hardware/stepper_driver.hpp"
 #include "roby_hardware/servo_driver.hpp"
@@ -40,6 +42,7 @@ struct JointInfo
   double velocity = 0.0;
   double command = 0.0;
   double prev_position = 0.0;
+  double servo_offset_deg = 0.0;  // centre servo (0 rad joint = cet angle)
   // Closed-loop encodeur (feedback) en complement du feedforward (command).
   // Gains a 0 par defaut => correction nulle => open-loop. Voir pid.hpp / BUG-005.
   PidState pid;
@@ -85,9 +88,18 @@ private:
   /// Message Float64MultiArray : [joint_number, kp, ki, kd, deadband].
   void on_pid_gains(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
 
+  /// Callbacks verrou tete (/head_lock) et pince (/gripper). Ils NE font QUE
+  /// poser une cible atomique ; l'ecriture I2C est faite dans write() (thread
+  /// RT), seul maitre du bus PCA9685 => pas de collision (cf. servo_driver.cpp).
+  void on_head_lock(const std_msgs::msg::Bool::SharedPtr msg);
+  void on_gripper(const std_msgs::msg::Bool::SharedPtr msg);
+  // Reglage LIVE du serrage : angle brut en degres (topic /roby/gripper_deg).
+  void on_gripper_deg(const std_msgs::msg::Float64::SharedPtr msg);
+
   std::vector<JointInfo> joints_;
   std::vector<std::unique_ptr<StepperDriver>> steppers_;
   std::vector<std::unique_ptr<ServoDriver>> servos_;
+  bool dry_run_ = false;
   SafetyMonitor safety_;
 
   // Coupling parameters
@@ -121,6 +133,46 @@ private:
   rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr pid_sub_;
   std::thread tuning_thread_;
   std::atomic<bool> tuning_running_{false};
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr head_lock_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr gripper_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr gripper_deg_sub_;
+
+  // Verrou tete (CH2) + pince (CH3) du changeur d'outil : hors chaine
+  // cinematique, pilotes par topic. Instances ServoDriver dediees, ecrites
+  // UNIQUEMENT dans write() (thread RT) => un seul maitre du bus I2C.
+  std::unique_ptr<ServoDriver> lock_servo_;
+  std::unique_ptr<ServoDriver> gripper_servo_;
+  static constexpr double kNoServoTarget = -1000.0;  // sentinelle "aucune cible"
+  std::atomic<double> lock_target_deg_{kNoServoTarget};
+  std::atomic<double> gripper_target_deg_{kNoServoTarget};
+  // Rampe de commande servo (anti-saccade de slew : le servo brouttait sur un
+  // step brutal 70<->115, surtout en cyclage rapide). On approche la cible de
+  // kServoRampDeg par cycle RT (100Hz) => ~0.3s pour 45deg, mouvement lisse.
+  static constexpr double kServoRampDeg = 1.5;  // deg/cycle @100Hz
+  double lock_cmd_deg_ = 50.0;      // angle commande courant du verrou (rampe)
+  double gripper_cmd_deg_ = 120.0;  // angle commande courant de la pince (rampe)
+  double lock_locked_deg_ = 50.0;    // 2026-07-07 : 50=verrouille (inverse ancienne calib)
+  double lock_unlocked_deg_ = 75.0;  // 75=deverrouille
+  double gripper_open_deg_ = 120.0;
+  double gripper_closed_deg_ = 55.0;
+
+  // --- Partie B : recalage one-shot au settle (joint_2/3 open-loop) ---------
+  // A l'arret (consigne stable + axes immobiles), grosse mediane des lectures
+  // encodeur (robuste au bruit) -> recale le compteur de pas dessus -> le
+  // feedforward comble l'ecart, puis stop. Max kSettleMaxCorrections / mouvement.
+  void settle_recalibrate();
+  std::vector<double> prev_commands_;
+  std::vector<double> prev_step_pos_;
+  std::vector<std::vector<double>> settle_samples_;
+  int settle_counter_ = 0;
+  int settle_phase_ = 0;
+  int settle_correction_count_ = 0;
+  static constexpr int kSettleWaitCycles = 25;
+  static constexpr int kSettleCollectN = 60;
+  static constexpr double kSettleStepEps = 5e-5;
+  static constexpr double kSettleDeadbandRad = 0.0087;   // ~0.5 deg
+  static constexpr double kSettleMaxCorrRad = 0.35;      // ~20 deg : au-dela = aberrant
+  static constexpr int kSettleMaxCorrections = 2;
 };
 
 }  // namespace roby_hardware

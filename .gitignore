@@ -5,6 +5,8 @@ log/
 __pycache__/
 .colcon/
 
-# sauvegardes manuelles horodatees : jamais commitees
+# Sauvegardes manuelles horodatees (versionnement artisanal) : jamais commitees.
+# Elles etaient le SEUL filet de securite avant la mise sous git du 2026-07-20 ;
+# desormais l'historique git les remplace.
 *.bak
 *.bak_*

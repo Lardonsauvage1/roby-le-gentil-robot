@@ -54,11 +54,12 @@ public:
 
 private:
   bool init_pca9685();
-  void write_channel(int channel, uint16_t on, uint16_t off);
+  bool write_channel(int channel, uint16_t on, uint16_t off);
   void write_register(uint8_t reg, uint8_t value);
 
   ServoConfig config_;
   double current_angle_deg_ = 0.0;
+  uint16_t last_off_tick_ = 0xFFFF;   // sentinelle : force la 1re ecriture (init)
   int i2c_fd_ = -1;
   bool pca9685_initialized_ = false;
 
