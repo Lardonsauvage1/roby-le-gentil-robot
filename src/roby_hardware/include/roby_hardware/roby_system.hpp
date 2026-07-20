@@ -102,6 +102,14 @@ private:
   bool dry_run_ = false;
   SafetyMonitor safety_;
 
+  // Butees de position lues dans l'URDF (info_.limits), par joint et dans l'ordre
+  // de info_.joints. Appliquees en espace ARTICULAIRE dans write(), AVANT la
+  // compensation de couplage : apres couplage la valeur est cote MOTEUR et son
+  // domaine est decale, une limite d'axe y serait fausse (cf 544c22e / 69fd8a6).
+  // Paire {min, max} ; min >= max => axe sans butee declaree, aucun clamp.
+  std::vector<std::pair<double, double>> joint_pos_limits_;
+  std::vector<bool> limit_warned_;   // avertissement une seule fois par axe (RT)
+
   // Coupling parameters
   bool coupling_enabled_ = false;
   double coupling_ratio_m2_ = 0.0;  // RATIO_AXE_3_M2

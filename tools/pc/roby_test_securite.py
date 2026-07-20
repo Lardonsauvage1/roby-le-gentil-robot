@@ -29,6 +29,7 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from sensor_msgs.msg import JointState
 
 J = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
+MAX_VEL_GARDE = 1.0   # doit correspondre a --max-vel de roby_guard.py
 LIM = {"joint_1": (-3.14159, 3.14159), "joint_2": (-1.6, 2.1),
        "joint_3": (-3.0, 0.65), "joint_4": (-3.1416, 3.1416),
        "joint_5": (-1.6, 1.6)}
@@ -127,11 +128,18 @@ def main():
         print(f"  amplitude reelle  : {abs(hi - cur[idx]):.3f} rad si le clamp marche,"
               f" {abs(demande - cur[idx]):.3f} rad sinon")
     else:
-        demande = min(hi - 0.05, cur[idx] + 1.2)
+        # Deplacement PETIT (< max_step 0.2 du garde, sinon il gele pour teleport)
+        # mais demande en un temps TRES court -> vitesse demandee tres superieure
+        # a la limite. C'est le clamp de VITESSE qu'on isole ici, pas les autres
+        # protections : un saut trop grand declenche l'anti-teleport, et une cible
+        # trop basse declenche le plancher -- les deux masqueraient la mesure.
+        demande = min(hi - 0.05, cur[idx] + 0.15)
         tgt[idx] = demande
+        dt_demande = 0.05
         print(f"TEST VITESSE — {name}")
         print(f"  position actuelle : {cur[idx]:+.4f} rad")
-        print(f"  consigne          : {demande:+.4f} rad en 0.2 s  = saut brutal")
+        print(f"  consigne          : {demande:+.4f} rad en {dt_demande} s")
+        print(f"  vitesse DEMANDEE  : {abs(demande - cur[idx]) / dt_demande:.1f} rad/s")
         print(f"  topic             : {topic}  (le garde doit brider)")
         print(f"  ATTENDU           : vitesse de sortie bornee par --max-vel du garde (1.0 rad/s)")
 
@@ -146,7 +154,7 @@ def main():
     print(f"\n  abonne(s) detecte(s) sur {topic} : {nsub}")
 
     depart = n.cur[idx]
-    secs = a.secs if a.test == "butees" else 0.2
+    secs = a.secs if a.test == "butees" else 0.05
     n.send(tgt, secs)
     trace = n.observe(a.secs)
     fin = n.cur[idx]
@@ -166,9 +174,22 @@ def main():
               f"arret a {fin:+.4f} pour une consigne de {demande:+.4f}")
         print(f"       depassement de butee : {max(0.0, fin - hi):+.4f} rad")
     else:
-        v = vmax_of(trace, idx)
-        print(f"  ---> vitesse max observee : {v:.3f} rad/s")
-        print(f"  ---> {'✅ BRIDEE' if v <= 1.15 else '❌ NON BRIDEE'} (seuil garde 1.0 rad/s)")
+        # On juge sur le PAS AUTORISE par le garde, pas sur la vitesse de parcours
+        # lue dans /joint_states : cette derniere mesure la facon dont le controleur
+        # rejoint le setpoint (spline, jitter d'echantillonnage) et non la limitation
+        # elle-meme. Le garde borne le pas a max_vel * dt : c'est CA qu'on verifie.
+        demande_delta = abs(demande - depart)
+        autorise = MAX_VEL_GARDE * dt_demande
+        v_parcours = vmax_of(trace, idx)
+        print(f"  ---> deplacement DEMANDE : {demande_delta:.4f} rad en {dt_demande}s "
+              f"= {demande_delta / dt_demande:.1f} rad/s")
+        print(f"  ---> deplacement APPLIQUE: {bouge:.4f} rad   (plafond garde "
+              f"{MAX_VEL_GARDE} x {dt_demande} = {autorise:.4f})")
+        ok = bouge <= autorise * 1.05
+        print(f"  ---> {'✅ BRIDE' if ok else '❌ NON BRIDE'} : le garde a laisse passer "
+              f"{bouge / demande_delta * 100:.0f} % du deplacement demande")
+        print(f"       (vitesse de parcours observee {v_parcours:.2f} rad/s = maniere dont le")
+        print(f"        controleur rejoint le setpoint, hors sujet pour ce verdict)")
     n.destroy_node(); rclpy.shutdown()
     return 0
 

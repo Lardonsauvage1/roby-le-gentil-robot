@@ -96,6 +96,24 @@ hardware_interface::CallbackReturn RobySystem::on_init(
   stepper_index_.resize(info_.joints.size(), -1);
   servo_index_.resize(info_.joints.size(), -1);
 
+  // Butees URDF : info_.limits est peuple par ros2_control depuis <limit lower/upper>.
+  // Elles sont appliquees en espace ARTICULAIRE dans write() (avant couplage).
+  joint_pos_limits_.assign(info_.joints.size(), {1.0, -1.0});   // {min>max} = pas de butee
+  limit_warned_.assign(info_.joints.size(), false);
+  for (size_t i = 0; i < info_.joints.size(); ++i) {
+    auto it = info_.limits.find(info_.joints[i].name);
+    if (it != info_.limits.end() && it->second.has_position_limits) {
+      joint_pos_limits_[i] = {it->second.min_position, it->second.max_position};
+      RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
+        "%s : butees URDF [%.4f, %.4f] rad (clamp en espace articulaire)",
+        info_.joints[i].name.c_str(), it->second.min_position, it->second.max_position);
+    } else {
+      RCLCPP_WARN(rclcpp::get_logger("RobySystem"),
+        "%s : aucune butee de position dans l'URDF -> AUCUN clamp pour cet axe.",
+        info_.joints[i].name.c_str());
+    }
+  }
+
   std::vector<JointSafetyConfig> safety_configs;
 
   for (size_t i = 0; i < info_.joints.size(); ++i) {
@@ -825,6 +843,30 @@ hardware_interface::return_type RobySystem::write(
     // suivre motor_3 aux vrais mouvements de motor_2 (closed-loop joint_2) =>
     // joint_3 reste en place => plus de vibration parasite couplee. La deadband
     // de joint_2 garantit correction=0 au repos (pas d injection de bruit).
+    // --- Butees URDF : clamp en espace ARTICULAIRE, AVANT le couplage (2026-07-20)
+    //
+    // C'est ICI que la limite a un sens : cmd est encore une position d'AXE.
+    // Apres compensate_coupling ce sera une position de MOTEUR, dont le domaine
+    // est decale par le couplage 2/3 (rapport 0.625) -- y appliquer une limite
+    // d'axe epinglait joint_3 a sa butee et le rendait totalement inerte
+    // (regression 544c22e, constatee moteurs desolidarises, annulee en 69fd8a6).
+    //
+    // Le clamp de safety_.clamp_command() reste applique plus bas SUR LA VALEUR
+    // MOTEUR : il garde son role de limitation de VITESSE, et ses bornes de
+    // position (+/-PI) sont assez larges pour ne pas gener le domaine couple.
+    if (i < joint_pos_limits_.size() && joint_pos_limits_[i].first < joint_pos_limits_[i].second) {
+      const double lo = joint_pos_limits_[i].first, hi = joint_pos_limits_[i].second;
+      if (cmd < lo || cmd > hi) {
+        if (!limit_warned_[i]) {          // une seule fois par axe : pas de spam RT
+          RCLCPP_WARN(rclcpp::get_logger("RobySystem"),
+            "%s : consigne %.4f hors butee URDF [%.4f, %.4f] -> clampee",
+            joints_[i].name.c_str(), cmd, lo, hi);
+          limit_warned_[i] = true;
+        }
+        cmd = std::clamp(cmd, lo, hi);
+      }
+    }
+
     if (coupling_enabled_ && joints_[i].name == "joint_3") {
       cmd = compensate_coupling(cmd, joint_2_effective_cmd);
     }
