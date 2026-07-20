@@ -4,3 +4,7 @@ log/
 *.pyc
 __pycache__/
 .colcon/
+
+# sauvegardes manuelles horodatees (versionnement artisanal) : jamais commitees
+*.bak
+*.bak_*

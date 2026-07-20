@@ -54,7 +54,7 @@ public:
 
 private:
   bool init_pca9685();
-  void write_channel(int channel, uint16_t on, uint16_t off);
+  bool write_channel(int channel, uint16_t on, uint16_t off);
   void write_register(uint8_t reg, uint8_t value);
 
   ServoConfig config_;

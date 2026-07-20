@@ -59,6 +59,17 @@
                     <!-- I2C config (unused but kept for init) -->
                     <param name="i2c_bus">/dev/i2c-1</param>
                     <param name="pca9685_address">0x40</param>
+                    <!-- Pince (CH3), valeur de fermeture. ATTENTION :
+                         70 deg = fermeture PARTIELLE, la pince NE se ferme PAS
+                         entierement (serrage doux, reglage 2026-07-11).
+                         L'ancienne valeur 55 deg fermait la pince COMPLETEMENT
+                         (mais serrait trop l'objet). Remettre 55 pour une
+                         fermeture totale. -->
+                    <param name="gripper_closed_deg">75.0</param>
+                    <!-- Pince (CH3), valeur d'ouverture. 115 deg = ouverture
+                         REDUITE de 5 deg (2026-07-12). L'ancienne valeur 120 deg
+                         = ouverture COMPLETE. Remettre 120 pour l'ouverture maxi. -->
+                    <param name="gripper_open_deg">110.0</param>
                     <!-- Coupling axes 2/3 ENABLED -->
                     <param name="coupling_enabled">true</param>
                     <param name="coupling_ratio_m2_num">-6000</param>

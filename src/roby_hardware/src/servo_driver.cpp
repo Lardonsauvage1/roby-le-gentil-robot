@@ -2,6 +2,9 @@
 
 #include <cmath>
 #include <algorithm>
+#include <cstdio>
+#include <chrono>
+#include <cerrno>
 
 #ifdef __linux__
 #include <fcntl.h>
@@ -118,9 +121,14 @@ void ServoDriver::set_angle_deg(double angle_deg)
   if (off_tick == last_off_tick_) {
     return;
   }
-  last_off_tick_ = off_tick;
-
-  write_channel(config_.channel, 0, off_tick);
+  // Ne committer l'etat "ecrit" QUE si l'I2C a reellement pris. Sinon un NAK ou
+  // un glitch de bus UNIQUE laisserait le servo bloque a l'ancien angle POUR
+  // TOUJOURS (write-on-change ne reessaierait jamais) : cause probable de la
+  // pince qui "ne s'ouvre jamais / qu'a la fin". Ici on reessaie au cycle RT
+  // suivant tant que ca rate, puis on s'arrete des que ca passe (0 trafic au repos).
+  if (write_channel(config_.channel, 0, off_tick)) {
+    last_off_tick_ = off_tick;
+  }
 }
 
 double ServoDriver::get_angle_deg() const
@@ -149,11 +157,17 @@ uint16_t ServoDriver::angle_to_duty(double angle_deg)
   return static_cast<uint16_t>((pulse_us / 20000.0) * 65535.0);
 }
 
-void ServoDriver::write_channel(int channel, uint16_t on, uint16_t off)
+bool ServoDriver::write_channel(int channel, uint16_t on, uint16_t off)
 {
 #ifdef __linux__
-  if (i2c_fd_ < 0 || !pca9685_initialized_) return;
+  if (i2c_fd_ < 0 || !pca9685_initialized_) return false;
 
+  if (channel == 3) {  // CH3-SPY : ecriture reelle vers la pince
+    double t = std::chrono::duration<double>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+    fprintf(stderr, "[CH3-SPY] t=%.3f off_tick=%u\n", t, static_cast<unsigned>(off));
+    fflush(stderr);
+  }
   uint8_t reg = PCA9685_LED0_ON_L + 4 * channel;
   uint8_t data[5] = {
     reg,
@@ -162,11 +176,21 @@ void ServoDriver::write_channel(int channel, uint16_t on, uint16_t off)
     static_cast<uint8_t>(off & 0xFF),
     static_cast<uint8_t>((off >> 8) & 0x0F)
   };
-  write(i2c_fd_, data, 5);
+  ssize_t n = write(i2c_fd_, data, 5);
+  if (n != 5) {
+    // Ecriture I2C incomplete/ratee : on le SIGNALE et on renvoie false pour que
+    // set_angle_deg NE committe PAS last_off_tick_ (=> reessai au cycle suivant).
+    fprintf(stderr, "[SERVO-I2C-FAIL] ch=%d off=%u n=%zd errno=%d\n",
+            channel, static_cast<unsigned>(off), n, errno);
+    fflush(stderr);
+    return false;
+  }
+  return true;
 #else
   (void)channel;
   (void)on;
   (void)off;
+  return false;
 #endif
 }
 

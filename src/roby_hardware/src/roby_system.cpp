@@ -413,6 +413,56 @@ hardware_interface::CallbackReturn RobySystem::on_activate(
     pid_sub_ = tuning_node_->create_subscription<std_msgs::msg::Float64MultiArray>(
       "/roby/pid_gains", 10,
       std::bind(&RobySystem::on_pid_gains, this, std::placeholders::_1));
+    // Verrou tete (/head_lock) + pince (/gripper) : sur le MEME noeud/thread que
+    // le tuning. Les callbacks posent une cible ; write() (thread RT) ecrit le bus.
+    head_lock_sub_ = tuning_node_->create_subscription<std_msgs::msg::Bool>(
+      "/head_lock", 10,
+      std::bind(&RobySystem::on_head_lock, this, std::placeholders::_1));
+    gripper_sub_ = tuning_node_->create_subscription<std_msgs::msg::Bool>(
+      "/gripper", 10,
+      std::bind(&RobySystem::on_gripper, this, std::placeholders::_1));
+    // Angle BRUT de la pince, pour regler le serrage a chaud sans rebuild :
+    //   ros2 topic pub --once /roby/gripper_deg std_msgs/msg/Float64 "{data: 76.0}"
+    gripper_deg_sub_ = tuning_node_->create_subscription<std_msgs::msg::Float64>(
+      "/roby/gripper_deg", 10,
+      std::bind(&RobySystem::on_gripper_deg, this, std::placeholders::_1));
+    // Instancie les servos verrou/pince (hors chaine cinematique). Re-init a
+    // chaque activation. angle_init : verrou=verrouille, pince=ouverte (etats surs).
+    // Calibre 2026-07-07 : 50 deg = VERROUILLE, 75 deg = DEVERROUILLE (inverse
+    // de l'ancienne note 2026-06-02 ; palonnier remonte). Surchargeable par param.
+    lock_locked_deg_    = get_param_double("head_lock_locked_deg", 50.0);
+    lock_unlocked_deg_  = get_param_double("head_lock_unlocked_deg", 75.0);
+    gripper_open_deg_   = get_param_double("gripper_open_deg", 120.0);
+    gripper_closed_deg_ = get_param_double("gripper_closed_deg", 55.0);
+    {
+      std::string i2c_bus = get_param("i2c_bus", "/dev/i2c-1");
+      int pca_addr = get_param_int("pca9685_address", 0x40);
+#ifdef __linux__
+      bool i2c_mock = (access(i2c_bus.c_str(), F_OK) != 0);
+#else
+      bool i2c_mock = true;
+#endif
+      ServoConfig lc;
+      lc.i2c_bus = i2c_bus; lc.pca9685_address = pca_addr;
+      lc.channel = get_param_int("head_lock_channel", 2);
+      lc.angle_min_deg = 0.0; lc.angle_max_deg = 180.0;
+      lc.angle_init_deg = lock_locked_deg_; lc.inverted = false; lc.mock = i2c_mock;
+      lock_servo_ = std::make_unique<ServoDriver>();
+      lock_servo_->init(lc);
+      ServoConfig gc;
+      gc.i2c_bus = i2c_bus; gc.pca9685_address = pca_addr;
+      gc.channel = get_param_int("gripper_channel", 3);
+      gc.angle_min_deg = 0.0; gc.angle_max_deg = 180.0;
+      gc.angle_init_deg = gripper_open_deg_; gc.inverted = false; gc.mock = i2c_mock;
+      gripper_servo_ = std::make_unique<ServoDriver>();
+      gripper_servo_->init(gc);
+    }
+    // La rampe part de l'etat init reel des servos (verrou verrouille, pince
+    // ouverte) : le 1er mouvement commande sera lisse depuis la vraie position.
+    lock_cmd_deg_ = lock_locked_deg_;
+    gripper_cmd_deg_ = gripper_open_deg_;
+    lock_target_deg_.store(kNoServoTarget);
+    gripper_target_deg_.store(kNoServoTarget);
     tuning_running_ = true;
     tuning_thread_ = std::thread([this]() {
       rclcpp::executors::SingleThreadedExecutor exec;
@@ -466,6 +516,41 @@ void RobySystem::on_pid_gains(const std_msgs::msg::Float64MultiArray::SharedPtr 
     "/roby/pid_gains : joint '%s' introuvable", target.c_str());
 }
 
+void RobySystem::on_head_lock(const std_msgs::msg::Bool::SharedPtr msg)
+{
+  // Ne fait QUE poser la cible ; l'ecriture I2C est faite par write() (thread RT),
+  // seul maitre du bus PCA9685 => jamais de collision.
+  lock_target_deg_.store(msg->data ? lock_locked_deg_ : lock_unlocked_deg_);
+  RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
+    "/head_lock -> %s (%.1f deg)", msg->data ? "VERROUILLE" : "DEVERROUILLE",
+    msg->data ? lock_locked_deg_ : lock_unlocked_deg_);
+}
+
+void RobySystem::on_gripper(const std_msgs::msg::Bool::SharedPtr msg)
+{
+  // data=true => pince FERMEE (cf. roby_fine_jog / roby_tool_pickup). Idem : la
+  // cible est posee ici, l'ecriture bus se fait dans write().
+  gripper_target_deg_.store(msg->data ? gripper_closed_deg_ : gripper_open_deg_);
+  RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
+    "/gripper -> %s (%.1f deg)", msg->data ? "FERME" : "OUVRE",
+    msg->data ? gripper_closed_deg_ : gripper_open_deg_);
+}
+
+void RobySystem::on_gripper_deg(const std_msgs::msg::Float64::SharedPtr msg)
+{
+  // Commande un angle BRUT (reglage du serrage). Borne dur : hors de cette plage
+  // le servo force en butee mecanique (provisoire, sous-dimensionne).
+  const double kMin = 40.0, kMax = 130.0;
+  double a = msg->data;
+  if (a < kMin || a > kMax) {
+    RCLCPP_WARN(rclcpp::get_logger("RobySystem"),
+      "/roby/gripper_deg %.1f REFUSE (hors [%.0f,%.0f])", a, kMin, kMax);
+    return;
+  }
+  gripper_target_deg_.store(a);
+  RCLCPP_INFO(rclcpp::get_logger("RobySystem"), "/roby/gripper_deg -> %.1f deg", a);
+}
+
 hardware_interface::CallbackReturn RobySystem::on_deactivate(
   const rclcpp_lifecycle::State & /*previous_state*/)
 {
@@ -476,6 +561,9 @@ hardware_interface::CallbackReturn RobySystem::on_deactivate(
       tuning_thread_.join();
     }
     pid_sub_.reset();
+    head_lock_sub_.reset();
+    gripper_sub_.reset();
+    gripper_deg_sub_.reset();
     tuning_node_.reset();
   }
 
@@ -486,6 +574,8 @@ hardware_interface::CallbackReturn RobySystem::on_deactivate(
   for (auto & s : servos_) {
     s->shutdown();
   }
+  if (lock_servo_) lock_servo_->shutdown();
+  if (gripper_servo_) gripper_servo_->shutdown();
   if (encoder_) {
     encoder_->shutdown();
     encoder_.reset();
@@ -775,6 +865,27 @@ hardware_interface::return_type RobySystem::write(
     } else {
       // MOCK: directly set position
       joints_[i].position = cmd;
+    }
+  }
+
+  // Verrou tete (CH2) + pince (CH3) : applique la cible posee par les callbacks
+  // /head_lock /gripper. Ecrit ICI (thread RT) => SEUL maitre du bus I2C, jamais
+  // depuis le callback => plus de collision (cf. incident servo_driver.cpp).
+  // set_angle_deg est write-on-change : aucun trafic bus tant que la cible ne
+  // change pas (donc aucun surcout RT au repos).
+  // Rampe douce vers la cible (kServoRampDeg/cycle) : evite l'a-coup/bourdonnement
+  // du servo sur un step brutal, surtout en cyclage rapide (ouvre/ferme rapproches).
+  // Ecritures I2C seulement pendant la rampe (write-on-change), puis 0 au repos.
+  if (!dry_run_) {
+    double lt = lock_target_deg_.load();
+    if (lt != kNoServoTarget && lock_servo_) {
+      lock_cmd_deg_ += std::clamp(lt - lock_cmd_deg_, -kServoRampDeg, kServoRampDeg);
+      lock_servo_->set_angle_deg(lock_cmd_deg_);
+    }
+    double gt = gripper_target_deg_.load();
+    if (gt != kNoServoTarget && gripper_servo_) {
+      gripper_cmd_deg_ += std::clamp(gt - gripper_cmd_deg_, -kServoRampDeg, kServoRampDeg);
+      gripper_servo_->set_angle_deg(gripper_cmd_deg_);
     }
   }
 
