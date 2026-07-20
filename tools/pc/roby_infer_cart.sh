@@ -19,7 +19,11 @@ set -e
 
 VENV=/home/sam/lerobot-experiments/venv/bin/python
 LEROBOT=/home/sam/lerobot-experiments
-MODEL_DEFAULT="$HOME/deployable_models/apple/b2cart_fixed_96/pretrained_model"
+# Defaut = le PETIT cartesien (39M). Mesure epinglee sur les P-cores : 222 ms, donc
+# dans le budget de 533 ms -> mouvement quasi continu. Le gros (b2cart_fixed_96, 263M)
+# demande 3.6 s par inference, soit 7x le budget : le bras bouge 0.5 s puis tient 3.5 s.
+# Il reste accessible via --model, mais ce n'est pas un defaut raisonnable.
+MODEL_DEFAULT="$HOME/deployable_models/apple/b2cart_small_96/pretrained_model"
 
 source /opt/ros/jazzy/setup.bash
 [ -f "$HOME/ros2_ws/install/setup.bash" ] && source "$HOME/ros2_ws/install/setup.bash"

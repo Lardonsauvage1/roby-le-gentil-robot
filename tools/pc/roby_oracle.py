@@ -323,6 +323,34 @@ def sample_aerien(motion, rng):
     return None
 
 
+
+def _angles_pince_reels():
+    """Lit les angles de pince DANS LA CONFIG CHARGEE, au lieu de les recopier.
+
+    Avant (2026-07-20), ces valeurs etaient ecrites en dur dans la fiche d'episode :
+    110/70, alors que le xacro reellement charge disait 110/75 depuis le reglage du
+    serrage. Les fiches affirmaient donc un angle de fermeture qui n'avait jamais ete
+    execute -- exactement le genre de detail qui fait chercher au mauvais endroit des
+    mois plus tard. En cas d'echec de lecture on renvoie None : une fiche qui dit
+    "je ne sais pas" vaut mieux qu'une fiche qui se trompe.
+    """
+    import re
+    for base in (os.path.expanduser("~/rlgr"), os.path.expanduser("~/ros2_ws")):
+        f = os.path.join(base, "src/roby_hardware/config/"
+                               "roby_hardware_steppers_only.ros2_control.xacro")
+        try:
+            txt = open(f, encoding="utf-8").read()
+        except OSError:
+            continue
+        o = re.search(r'name="gripper_open_deg">([0-9.]+)<', txt)
+        c = re.search(r'name="gripper_closed_deg">([0-9.]+)<', txt)
+        if o and c:
+            return {"open_deg_stack": float(o.group(1)),
+                    "closed_deg_stack": float(c.group(1)),
+                    "source": f}
+    return {"open_deg_stack": None, "closed_deg_stack": None,
+            "source": "NON LU - ne pas se fier a ces valeurs"}
+
 def _episode_meta(i, seed, mode, R, vel, cart_speed):
     """Fiche d'infos d'un episode enregistre (ecrite a cote du bag : <ep>.meta.json)."""
     import datetime
@@ -348,8 +376,8 @@ def _episode_meta(i, seed, mode, R, vel, cart_speed):
             "w_ori_descente": W_ORI_DESCENT,
             "lift_m": LIFT,
         },
-        "pince": {"topic": "/gripper Bool (true=FERME, false=OUVRE)",
-                  "open_deg_stack": 110, "closed_deg_stack": 70},
+        "pince": dict({"topic": "/gripper Bool (true=FERME, false=OUVRE)"},
+                       **_angles_pince_reels()),
         "vitesses": {"libre_moveit": vel, "ligne_droite_m_s": cart_speed},
     }
 

@@ -33,16 +33,15 @@ from rclpy.serialization import deserialize_message
 from lerobot.policies.diffusion.modeling_diffusion import DiffusionPolicy
 from lerobot.policies.factory import make_pre_post_processors
 
+# Pretraitement PARTAGE : 4e et derniere copie de decode_resize eliminee (2026-07-20).
+# Ce fichier figeait la resolution a 224 en dur, ce qui le rendait FAUX sur tous les
+# modeles actuels (96/128) -- le risque n'etait pas la formule, identique partout,
+# mais le parametre.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.expanduser("~"))
+from roby_vision import decode_resize, image_keys, img_size_from_policy
+
 J = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
-
-
-def decode_resize(jpeg, dev, size):
-    """size = resolution DU MODELE, lue dans le checkpoint. Surtout PAS une constante :
-    un `IMG = 224` en dur ici rendait ce script inutilisable sur les modeles 96/128."""
-    arr = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
-    arr = cv2.resize(arr, (size, size), interpolation=cv2.INTER_AREA)
-    arr = cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
-    return (torch.from_numpy(arr).float().permute(2, 0, 1) / 255.0).unsqueeze(0).to(dev)
 
 
 def read_bag_obs(bag, hz):
@@ -81,10 +80,8 @@ class InferBag(Node):
         self.pre, self.post = make_pre_post_processors(
             policy_cfg=self.policy.config, pretrained_path=a.model,
             preprocessor_overrides={"device_processor": {"device": "cpu"}})
-        self.img_keys = [k for k in self.policy.config.input_features if "image" in k]
-        # resolution lue dans le checkpoint (96/128/224 selon la generation de modele)
-        self.img_size = int(
-            self.policy.config.input_features[self.img_keys[0]].shape[-1])
+        self.img_keys = image_keys(self.policy)
+        self.img_size = img_size_from_policy(self.policy)
         self.point_dt = 2.0 / a.hz
         self.pub_traj = self.create_publisher(JointTrajectory, "/guard/joint_trajectory", 10)
         self.pub_grip = self.create_publisher(Bool, "/guard/gripper", 10)

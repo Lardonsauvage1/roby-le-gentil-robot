@@ -203,12 +203,55 @@ class Panel:
             batch_path = cands[-1] if cands else None
         self.q.put(("done", {"batch": batch_path, "ok": ok}))
 
+    @staticmethod
+    def _bag_a_des_images(ep_dir):
+        """(ok, detail) — le bag contient-il vraiment des images des 2 cameras ?
+
+        Lit le metadata.yaml ecrit par rosbag2 (pas besoin de `ros2 bag info`, qui est
+        lent et depend de l'environnement ROS). On compte les messages par topic :
+        un topic camera declare mais a 0 message = noeud tombe pendant l'episode."""
+        meta = os.path.join(ep_dir, "metadata.yaml")
+        if not os.path.isfile(meta):
+            return False, "metadata.yaml absent"
+        try:
+            txt = open(meta, encoding="utf-8", errors="replace").read()
+        except Exception as e:
+            return False, f"metadata illisible ({e})"
+        counts = {}
+        topic = None
+        for line in txt.splitlines():
+            st = line.strip()
+            if st.startswith("- topic_metadata:") or st.startswith("topic_metadata:"):
+                topic = None
+            if st.startswith("name:") and "/head_camera/" in st:
+                topic = st.split("name:", 1)[1].strip()
+            elif st.startswith("message_count:") and topic:
+                try:
+                    counts[topic] = int(st.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+                topic = None
+        if not counts:
+            return False, "aucun topic camera dans le bag"
+        vides = [t for t, c in counts.items() if c == 0]
+        if vides:
+            return False, "0 image sur " + ", ".join(os.path.basename(v) for v in vides)
+        return True, " / ".join(f"{t.split('/')[2]}={c}" for t, c in sorted(counts.items()))
+
     def _on_done(self, info):
         batch = info["batch"]; ok = info["ok"]
         self.staging_batch = batch
         ep_dir = os.path.join(batch, "ep_000") if batch else None
+        # FIX 2026-07-20 : on validait la seule PRESENCE d'un .mcap. Un bag sans
+        # aucune image (noeud camera tombe en cours d'episode) passait donc le test et
+        # etait propose en GARDER -- c'est precisement le piege vecu le 2026-07-15
+        # (bag de 1.7 Mo, 0 image, decouvert bien plus tard). On lit desormais le
+        # metadata.yaml du bag et on exige des messages sur les topics camera.
         has_bag = ep_dir and os.path.isdir(ep_dir) and glob.glob(os.path.join(ep_dir, "*.mcap"))
-        if not ok or not has_bag:
+        img_ok, img_detail = self._bag_a_des_images(ep_dir) if has_bag else (False, "pas de bag")
+        if has_bag and not img_ok:
+            self._logln(f"  ❌ bag SANS IMAGES ({img_detail}) → jeté : inutilisable pour l'apprentissage.")
+        if not ok or not has_bag or not img_ok:
             # echec oracle ou bag vide : auto-jete + relance (sauf stop)
             self.discarded += 1
             self._refresh_counts()
@@ -237,7 +280,20 @@ class Panel:
             self._move_side(f"ep_000.meta.json", f"ep_{n:03d}.meta.json", set_ep=n)
             self._move_side(f"ep_000.rec.log", f"ep_{n:03d}.rec.log")
         except Exception as e:  # noqa
-            self._logln(f"  ⚠️ erreur rangement : {e}")
+            # FIX 2026-07-20 : avant, next_idx et kept etaient incrementes MEME en cas
+            # d'echec du rangement. L'episode etait donc perdu, le compteur mentait, et
+            # un trou silencieux apparaissait dans la numerotation. On sort sans compter.
+            self._logln(f"  ⚠️ ÉCHEC du rangement : {e}")
+            self._logln(f"     épisode NON compté (numérotation inchangée : ep_{n:03d} reste libre)")
+            self.discarded += 1
+            self._refresh_counts()
+            self._cleanup_staging()
+            if self.stopping:
+                self._go_idle("Arrêté.")
+            else:
+                self.status.set("↻ Rangement échoué — relance automatique…")
+                self.root.after(800, self._start_episode)
+            return
         self.next_idx += 1
         self.kept += 1
         self._refresh_counts()
