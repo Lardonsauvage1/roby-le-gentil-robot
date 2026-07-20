@@ -27,9 +27,15 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float32
 
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.expanduser("~"))
+from roby_gripper import GRIP_HAUT, GRIP_BAS, GRIP_MILIEU
+
 WIN = 60.0          # secondes affichees
-NEAR = 0.10         # marge au seuil consideree comme "indecis"
-THR = 0.5
+# La "bande" affichee est desormais EXACTEMENT l'hysteresis appliquee par les
+# noeuds d'inference : ce qu'on voit a l'ecran est ce qui est reellement decide.
+THR = GRIP_MILIEU
+NEAR = (GRIP_HAUT - GRIP_BAS) / 2.0
 
 BG = "#1e1e1e"
 FG = "#e0e0e0"

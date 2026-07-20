@@ -51,6 +51,7 @@ from lerobot.policies.factory import make_pre_post_processors
 # noeuds d'inference. Evite qu'une copie divergE - notamment la resolution, qui etait
 # figee a 224 en dur dans 3 fichiers et fausse sur les modeles 96/128.
 from roby_vision import decode_resize, image_keys, img_size_from_policy
+from roby_gripper import fermer as pince_fermer   # hysteresis : anti-claquement
 
 J = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
 
@@ -221,7 +222,8 @@ class Infer(Node):
         pt.time_from_start = Duration(sec=int(self.point_dt), nanosec=int((self.point_dt % 1) * 1e9))
         jt.points = [pt]
         self.pub_traj.publish(jt)                       # -> garde (clampe puis relaie)
-        close = bool(a[5] > 0.5)                         # gripper seuille (topic evenementiel)
+        # HYSTERESIS : meme correctif que la version cartesienne (cf roby_gripper.py).
+        close = pince_fermer(a[5], self.last_grip)
         if close != self.last_grip:
             self.pub_grip.publish(Bool(data=close))
             self.last_grip = close

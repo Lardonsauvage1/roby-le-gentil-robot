@@ -47,6 +47,7 @@ from roby_tool_pickup import dls, rotvec                 # IK amortie + rotation
 # Pretraitement PARTAGE : meme implementation que roby_infer.py (cf roby_vision.py).
 # Le crop interne 84/112 est applique par LeRobot en eval() : ne PAS cropper ici.
 from roby_vision import decode_resize, image_keys, img_size_from_policy
+from roby_gripper import fermer as pince_fermer   # hysteresis : anti-claquement
 
 import rclpy
 from rclpy.node import Node
@@ -297,7 +298,9 @@ class InferCart(Node):
         jt.points = [pt]
         self.pub_traj.publish(jt)
 
-        close = bool(a[6] > 0.5)                      # 7e composante = pince
+        # HYSTERESIS (2026-07-20) : un seuil unique a 0.5 faisait claquer la pince
+        # toutes les ~65 ms quand la prediction flottait autour. Cf roby_gripper.py.
+        close = pince_fermer(a[6], self.last_grip)
         if close != self.last_grip:
             self.pub_grip.publish(Bool(data=close))
             self.last_grip = close
