@@ -19,10 +19,22 @@ CAMS = [
 
 
 def pick(id_substr):
+    """Index de la camera dont l'Id contient id_substr, ou None si absente.
+
+    Avant (2026-07-20) : levait une exception, donc UNE camera debranchee empechait
+    le noeud de demarrer et privait de flux la camera SAINE. Or l'inference n'a
+    besoin que de la gauche : une nappe debranchee cote poignet bloquait tout le
+    deploiement pour rien. On saute desormais les absentes."""
     for i, info in enumerate(Picamera2.global_camera_info()):
         if id_substr in info.get("Id", ""):
             return i
-    raise RuntimeError(f"camera {id_substr} introuvable")
+    return None
+
+
+class CameraAbsente(Exception):
+    """Capteur non enumere (nappe debranchee, module HS). Non fatal : les autres
+    cameras doivent continuer a publier."""
+    pass
 
 
 class Cam:
@@ -31,7 +43,10 @@ class Cam:
         self.pub = node.create_publisher(
             CompressedImage, f"/head_camera/{c['side']}/image_raw/compressed", qos_profile_sensor_data)
         self.enc = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
-        self.cam = Picamera2(pick(c["cam"]))
+        idx = pick(c["cam"])
+        if idx is None:
+            raise CameraAbsente(c["cam"])
+        self.cam = Picamera2(idx)
         self.cam.configure(self.cam.create_still_configuration(main={"size": (640, 480), "format": "RGB888"}))
         self.cam.start()
         fd = int(1e6 / 15)
@@ -69,8 +84,25 @@ class Cam:
 def main():
     rclpy.init()
     node = rclpy.create_node("cam_pub_dual")
-    cams = [Cam(node, c) for c in CAMS]   # LES DEUX dans un seul process / CameraManager
-    node.get_logger().info(f"{len(cams)} cameras FIGEES lancees")
+    # UN SEUL process pour toutes les cameras (CameraManager partage) : deux process
+    # cassent le verrouillage expo/WB. Une camera absente est SAUTEE avec un
+    # avertissement, les autres publient quand meme.
+    cams = []
+    for c in CAMS:
+        try:
+            cams.append(Cam(node, c))
+        except CameraAbsente as e:
+            node.get_logger().warn(
+                f"camera '{c['side']}' ({e}) ABSENTE -> ignoree. "
+                f"L'inference n'a besoin que de 'left' ; l'enregistrement d'episodes, lui, "
+                f"exige les DEUX et sera inutilisable.")
+    if not cams:
+        node.get_logger().error("AUCUNE camera disponible -> arret.")
+        rclpy.shutdown()
+        return
+    node.get_logger().info(
+        f"{len(cams)}/{len(CAMS)} cameras FIGEES lancees : "
+        f"{', '.join(c.c['side'] for c in cams)}")
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
