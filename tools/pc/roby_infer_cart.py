@@ -131,6 +131,9 @@ class InferCart(Node):
         self.last_fk_mm = 0.0
         self.last_pred = None
         self.inf_heavy_ms = 0.0      # derniere VRAIE inference (pas un pop de file)
+        self.n_err = 0               # echecs CONSECUTIFS d'inference
+        self.n_err_total = 0
+        self.MAX_ERR = 5             # au-dela : desarmement automatique
 
         qos_img = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                              history=HistoryPolicy.KEEP_LAST, depth=1)
@@ -200,16 +203,33 @@ class InferCart(Node):
                 time.sleep(0.05)
                 continue
             t0 = time.perf_counter()
-            obs = self._get_obs()
-            if obs is None:
-                time.sleep(0.05)
+            try:
+                obs = self._get_obs()
+                if obs is None:
+                    time.sleep(0.05)
+                    continue
+                with torch.no_grad():
+                    a = self.post(self.policy.select_action(self.pre(obs)))
+                a = a.squeeze(0).cpu().numpy()
+                with self.lock:
+                    self.buf.append(a)
+                    self.last_pred = a
+                self.n_err = 0
+            except Exception as e:
+                # Voir roby_infer.py : sans ce filet, un JPEG corrompu tuait le
+                # thread et le bras tenait sa pose en affichant toujours "arme".
+                self.n_err += 1
+                self.n_err_total += 1
+                self.get_logger().error(
+                    f"inference EN ECHEC ({self.n_err}/{self.MAX_ERR}) : {type(e).__name__}: {e}")
+                if self.n_err >= self.MAX_ERR:
+                    self.armed = False
+                    with self.lock:
+                        self.buf.clear()
+                    self.get_logger().error(
+                        f"{self.MAX_ERR} echecs consecutifs -> DESARMEMENT AUTOMATIQUE.")
+                time.sleep(0.1)
                 continue
-            with torch.no_grad():
-                a = self.post(self.policy.select_action(self.pre(obs)))
-            a = a.squeeze(0).cpu().numpy()
-            with self.lock:
-                self.buf.append(a)
-                self.last_pred = a
             self.inf_ms = (time.perf_counter() - t0) * 1000
             if self.inf_ms > 50:                 # >50ms = vraie inference, pas un pop de file
                 self.inf_heavy_ms = self.inf_ms
@@ -315,7 +335,8 @@ class InferCart(Node):
 
     def _status(self):
         s = (f"CART armed={self.armed} inf={self.inf_heavy_ms:.0f}ms pub={self.n_pub} "
-             f"rejets={self.n_reject} buf={len(self.buf)} fk={self.last_fk_mm:.1f}mm go={self.a.go}")
+             f"rejets={self.n_reject} buf={len(self.buf)} fk={self.last_fk_mm:.1f}mm "
+             f"err={self.n_err_total} go={self.a.go}")
         self.pub_st.publish(String(data=s))
         # DIAGNOSTIC : ce que le reseau DEMANDE vs ou le bras EST. A lire avant d'autoriser --go.
         with self.lock:

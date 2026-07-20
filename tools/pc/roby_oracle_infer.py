@@ -79,34 +79,46 @@ def run(mode, n_episodes, seed, vel, cart_speed, return_time, go):
 
     motion.gripper(close=False)     # pince ouverte au départ
 
-    for i in range(n_episodes):
-        print(f"--- Episode {i:03d} ---")
-        # ===== SETUP (identique à l'oracle : MoveIt/DLS, in-distribution) =====
-        if not motion.pick_at("cone_D", O.D_XYZ):
-            print("  !! ECHEC prise D -> ARRET"); break
-        R = O.sample_table(motion, rng)
-        if R is None:
-            print("  !! pas de R atteignable, saut"); continue
-        if not motion.place_at("R_aleatoire", R):
-            print("  !! ECHEC pose R -> ARRET"); break
-        A = O.sample_aerien(motion, rng)
-        if A is None:
-            print("  !! pas de A atteignable, saut"); continue
-        if not motion.move_free("aerien_A", A):
-            print("  !! ECHEC aérien -> ARRET"); break
-        motion.gripper(close=False)          # pince OUVERTE = état de départ du dataset
-        if mode in ("plan", "real"):
-            time.sleep(1.0)                  # laisse la pose/pince se stabiliser avant le réseau
+    # try/finally OBLIGATOIRE (2026-07-20) : sans lui, un Ctrl-C ou une exception
+    # pendant wait(return_time) tuait l'oracle en laissant roby_infer ARME et --go.
+    # Le reseau continuait de piloter le bras, sans plus personne pour le desarmer.
+    # Le desarmement doit etre garanti quel que soit le chemin de sortie.
+    try:
+        for i in range(n_episodes):
+            print(f"--- Episode {i:03d} ---")
+            # ===== SETUP (identique à l'oracle : MoveIt/DLS, in-distribution) =====
+            if not motion.pick_at("cone_D", O.D_XYZ):
+                print("  !! ECHEC prise D -> ARRET"); break
+            R = O.sample_table(motion, rng)
+            if R is None:
+                print("  !! pas de R atteignable, saut"); continue
+            if not motion.place_at("R_aleatoire", R):
+                print("  !! ECHEC pose R -> ARRET"); break
+            A = O.sample_aerien(motion, rng)
+            if A is None:
+                print("  !! pas de A atteignable, saut"); continue
+            if not motion.move_free("aerien_A", A):
+                print("  !! ECHEC aérien -> ARRET"); break
+            motion.gripper(close=False)          # pince OUVERTE = état de départ du dataset
+            if mode in ("plan", "real"):
+                time.sleep(1.0)                  # laisse la pose/pince se stabiliser avant le réseau
 
-        # ===== RÉSEAU (remplace la ligne 411 : ramener la pomme R -> D) =====
-        print(f"  >> RÉSEAU prend la main {return_time}s (aérien A -> ramène la pomme à D)")
-        arm(True)
-        wait(return_time)
-        arm(False)
-        print(f"  episode {i:03d} : réseau a rendu la main\n")
+            # ===== RÉSEAU (remplace la ligne 411 : ramener la pomme R -> D) =====
+            print(f"  >> RÉSEAU prend la main {return_time}s (aérien A -> ramène la pomme à D)")
+            arm(True)
+            wait(return_time)
+            arm(False)
+            print(f"  episode {i:03d} : réseau a rendu la main\n")
 
-    if arm_cli is not None:
-        arm(False)                            # sécurité : réseau désarmé en fin
+    finally:
+        # Chemin de sortie GARANTI : normal, Ctrl-C, ou exception.
+        if arm_cli is not None:
+            try:
+                arm(False)
+                print('[securite] reseau DESARME')
+            except Exception as e:
+                print(f'[securite] ECHEC du desarmement : {e}')
+                print('[securite] >>> COUPER roby_infer A LA MAIN <<<')
     print("=== fin ===")
 
 

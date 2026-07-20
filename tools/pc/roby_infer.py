@@ -72,6 +72,19 @@ class Infer(Node):
             preprocessor_overrides={"device_processor": {"device": "cpu"}})
         self.img_keys = image_keys(self.policy)
         self.img_size = img_size_from_policy(self.policy, a.img_size)
+
+        # GARDE-FOU dimensions (2026-07-20) : ce noeud suppose un modele JOINT,
+        # c.-a-d. etat = 5 articulations et action = 5 articulations + pince.
+        # Sans ce controle, passer un modele CARTESIEN par erreur (les deux .sh
+        # acceptent --model) faisait envoyer a[:5] = [x, y, z, rvx, rvy] comme des
+        # consignes ARTICULAIRES en radians. Le garde clampe, donc pas de casse,
+        # mais le bras part n'importe ou. Symetrique du controle de roby_infer_cart.
+        sdim = int(self.policy.config.input_features["observation.state"].shape[-1])
+        adim = int(self.policy.config.output_features["action"].shape[-1])
+        if (sdim, adim) != (5, 6):
+            raise SystemExit(
+                f"❌ modele state={sdim} action={adim} : ce n'est PAS un modele joint "
+                f"(attendu 5/6). Pour un modele cartesien (6/7), utiliser roby_infer_cart.py.")
         # latence CPU : forcer 10 pas de debruitage DDPM (doc DEPLOY_B2 : defaut 100 = trop lent CPU)
         try:
             self.policy.diffusion.num_inference_steps = 10
@@ -89,6 +102,9 @@ class Infer(Node):
         self.last_action = None; self.last_grip = None
         self.armed = not a.arm_gate                  # --arm-gate : demarre DESARME (l'oracle arme)
         self.n_pub = 0; self.inf_ms = 0.0
+        self.n_err = 0            # echecs CONSECUTIFS d'inference (remis a 0 au succes)
+        self.n_err_total = 0      # cumul, pour le statut
+        self.MAX_ERR = 5          # au-dela : desarmement automatique
 
         # --- entrees : cameras best-effort (comme cam_pub), joints ---
         qos_img = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -145,19 +161,46 @@ class Infer(Node):
 
     # ---- thread d'inference : select_action a ~15 Hz, remplit le tampon (que si arme) ----
     def _infer_loop(self):
+        """⚠️ Ce thread NE DOIT JAMAIS mourir en silence (fix 2026-07-20).
+
+        Avant, aucun try/except : un seul JPEG corrompu (imdecode -> None, puis
+        resize qui leve) tuait le thread DEFINITIVEMENT. Le timer de publication
+        continuait alors a republier la derniere action indefiniment, le statut
+        affichait toujours armed=True, et le bras tenait sa pose. Rien n'indiquait
+        que le reseau ne pensait plus -- c'est le pire mode d'echec de la chaine,
+        parce qu'il est indiscernable d'un modele qui a converge.
+        """
         period = 1.0 / self.hz
         while self.run:
             if not self.armed:
                 time.sleep(0.05); continue
             t0 = time.perf_counter()
-            obs = self._get_obs()
-            if obs is None:
-                time.sleep(0.05); continue
-            with torch.no_grad():
-                a = self.post(self.policy.select_action(self.pre(obs)))   # pre/post OBLIGATOIRES
-            a = a.squeeze(0).cpu().numpy()
-            with self.lock:
-                self.buf.append(a)
+            try:
+                obs = self._get_obs()
+                if obs is None:
+                    time.sleep(0.05); continue
+                with torch.no_grad():
+                    a = self.post(self.policy.select_action(self.pre(obs)))   # pre/post OBLIGATOIRES
+                a = a.squeeze(0).cpu().numpy()
+                with self.lock:
+                    self.buf.append(a)
+                self.n_err = 0                          # succes : on repart de zero
+            except Exception as e:
+                self.n_err += 1
+                self.n_err_total += 1
+                self.get_logger().error(
+                    f"inference EN ECHEC ({self.n_err}/{self.MAX_ERR}) : {type(e).__name__}: {e}")
+                if self.n_err >= self.MAX_ERR:
+                    # On DESARME plutot que de laisser le bras tenir une pose
+                    # perimee en affichant "arme".
+                    self.armed = False
+                    with self.lock:
+                        self.buf.clear()
+                    self.get_logger().error(
+                        f"{self.MAX_ERR} echecs consecutifs -> DESARMEMENT AUTOMATIQUE. "
+                        f"Le reseau ne pilote plus. Reactiver via /roby_infer/arm apres diagnostic.")
+                time.sleep(0.1)
+                continue
             self.inf_ms = (time.perf_counter() - t0) * 1000
             dt = time.perf_counter() - t0
             if dt < period:                            # pacer a 15 Hz (les appels "file" sont rapides)
@@ -209,8 +252,10 @@ class Infer(Node):
         return resp
 
     def _status(self):
+        # err= est expose EXPRES : c'est le seul moyen de distinguer "le modele a
+        # converge et ne demande plus rien" de "le thread d'inference est mort".
         s = (f"hz={self.hz:.0f} armed={self.armed} inf={self.inf_ms:.0f}ms "
-             f"pub={self.n_pub} buf={len(self.buf)} go={self.a.go}")
+             f"pub={self.n_pub} buf={len(self.buf)} err={self.n_err_total} go={self.a.go}")
         self.pub_st.publish(String(data=s))
 
     def destroy_node(self):
