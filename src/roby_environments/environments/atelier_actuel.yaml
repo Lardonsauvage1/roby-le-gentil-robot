@@ -16,8 +16,8 @@ objects:
   # Plan de travail devant le robot  (descendu de 8cm) — MARRON
   - {name: plan_travail, type: box, size: [1.30, 0.76, 0.75], pose: [0.3925, 0.1625, -0.565], color: [0.80, 0.62, 0.42, 1.0]}
 
-  # Armoire électrique derrière — ROUGE = zone interdite (face haute alignée au dessus de la table Z=-0.190 ; face basse inchangée à -0.940)
-  - {name: armoire_elec, type: box, size: [0.60, 1.00, 0.75], pose: [-0.5575, 0.1625, -0.565], color: [0.90, 0.10, 0.10, 0.55]}
+  # Armoire électrique derrière — ROUGE = zone interdite (descendue de 40cm : centre z -0.565 -> -0.965, face haute -0.190 -> -0.590)
+  - {name: armoire_elec, type: box, size: [0.60, 1.00, 0.75], pose: [-0.5575, 0.1625, -0.965], color: [0.90, 0.10, 0.10, 0.55]}
 
   # Socle / base physique du robot  (sommet à 8cm sous la base de section 1) — MARRON CLAIR
   - {name: base_robot,   type: box, size: [0.515, 0.875, 0.13], pose: [0.00, 0.0925, -0.125], color: [0.80, 0.62, 0.42, 1.0]}

@@ -9,9 +9,7 @@
     <Discovery>
       <Peers>
         <Peer address="localhost"/>
-        <Peer address="192.168.1.95"/>
-        <Peer address="192.168.1.96"/>
-        <Peer address="192.168.1.28"/>
+        <Peer address="192.168.2.95"/>
       </Peers>
       <MaxAutoParticipantIndex>120</MaxAutoParticipantIndex>
     </Discovery>

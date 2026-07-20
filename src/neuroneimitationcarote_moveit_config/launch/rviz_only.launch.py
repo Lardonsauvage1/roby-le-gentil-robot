@@ -28,9 +28,12 @@ def generate_launch_description():
 
     ld = LaunchDescription()
 
-    # Robot state publisher (URDF + TF on PC side)
-    for action in generate_rsp_launch(moveit_config).entities:
-        ld.add_action(action)
+    # PAS de robot_state_publisher cote PC : il publierait l'URDF mock
+    # (FakeSystem) sur /robot_description et polluerait le topic partage ->
+    # le ros2_control_node du Pi chargerait le mock au lieu de RobySystem.
+    # RViz recupere robot_description + TF publies par le RSP du Pi (RobySystem).
+    # for action in generate_rsp_launch(moveit_config).entities:
+    #     ld.add_action(action)
 
     # NO move_group — it runs on Pi5
     # NO ros2_control — it runs on Pi5
