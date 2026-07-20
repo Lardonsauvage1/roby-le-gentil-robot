@@ -1,0 +1,7 @@
+head: null
+gripper: open
+holding: false
+rack:
+  pince: present
+  ventouse: present
+at: nid

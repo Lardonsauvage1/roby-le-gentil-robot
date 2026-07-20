@@ -2,5 +2,7 @@
 # Capture des poses avec l'outil de jog (bouton Capturer) -> elles s'ajoutent ici.
 nid: [1.5627, 1.0083, 0.3923, 0.0000, 0.2251]
 changeur_outil: [-0.5098, 0.9257, 0.5103, 0.0000, 0.2251]
+D_pose_cone: [0.5649, 1.2491, -0.5935, -0.0557, 1.0070]   # tcp_world_m=[0.6790, 0.4220, -0.0280] (2026-07-11, prise top-down)
 approche_changeur: [-0.5098, 0.6772, 0.5720, -0.0000, 0.4118]
 approche_nid: [1.5627, 0.7748, 0.4651, 0.0000, 0.3858]
+sortie: [0.6920, 0.5238, 0.4447, 0.0000, 0.2251]   # fin trajectoire sortie du nid (ajout 2026-07-17)

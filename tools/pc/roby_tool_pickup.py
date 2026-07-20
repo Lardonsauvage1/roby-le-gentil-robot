@@ -40,6 +40,8 @@ APPROACH = 0.10            # hauteur d'approche (m)
 CART_SPEED = 0.03          # vitesse cartesienne des lignes droites (m/s)
 STEP = 0.005               # pas d'interpolation des lignes droites (m)
 FREE_VEL = 0.50            # facteur vitesse du mouvement libre MoveIt (x5 vs le run lent 0.10)
+DESCENT_W_ORI = 1.0        # poids orientation des LIGNES DROITES (1=strict, changeur d'outil).
+                           # L'oracle le baisse (~0.2) pour prioriser la position sur toute la table.
 LIMITS = {"joint_1": (-3.14159, 3.14159), "joint_2": (-1.6, 2.1),
           "joint_3": (-3.0, 0.65), "joint_4": (-3.1416, 3.1416),
           "joint_5": (-1.6, 1.6)}
@@ -86,11 +88,15 @@ def jac(j, eps=1e-5):
     return Jm
 
 
-def dls(j, target_p, target_R, lam=0.06, iters=8):
+def dls(j, target_p, target_R, lam=0.06, iters=8, w_ori=1.0):
+    # w_ori < 1 => on prioritise la POSITION : l'erreur d'orientation compte moins,
+    # le solveur tient d'abord le xyz (utile en 5 DOF ou position+orientation
+    # exactes sont incompatibles loin de la zone centrale). w_ori=1 => comportement
+    # d'origine (orientation stricte, garde pour le changeur d'outil).
     j = np.array(j, float)
     for _ in range(iters):
         T = fkT(j); p = T[:3, 3]; R = T[:3, :3]
-        e = np.concatenate([target_p - p, R @ rotvec(R.T @ target_R)])
+        e = np.concatenate([target_p - p, w_ori * (R @ rotvec(R.T @ target_R))])
         Jm = jac(j)
         dq = Jm.T @ np.linalg.inv(Jm @ Jm.T + lam ** 2 * np.eye(6)) @ e
         j = j + dq
@@ -99,7 +105,7 @@ def dls(j, target_p, target_R, lam=0.06, iters=8):
 
 def load_pose(name):
     import yaml
-    for p in [POSES_FILE, os.path.expanduser("~/dock_calib_poses.yaml")]:
+    for p in [POSES_FILE]:
         if os.path.exists(p):
             d = yaml.safe_load(open(p)) or {}
             if name in d and len(d[name]) == 5:
@@ -152,7 +158,7 @@ class Pickup(Node):
         wps = []; j = start.copy(); track = 0.0
         for i in range(1, N + 1):
             wp = p0 + (i / N) * (np.array(target_p) - p0)
-            j = dls(j, wp, keepR)
+            j = dls(j, wp, keepR, w_ori=DESCENT_W_ORI)
             track = max(track, np.linalg.norm(fk_pos(j) - wp))
             # garde-fous : butées + pas de saut articulaire
             for k, jn in enumerate(J):
@@ -302,4 +308,5 @@ def main():
     os._exit(0)
 
 
-main()
+if __name__ == "__main__":
+    main()

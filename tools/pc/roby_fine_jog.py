@@ -43,8 +43,8 @@ LIMITS = {                       # butees position (rad), depuis l'URDF
 SPEED = 0.13            # rad/s — lent (open-loop, anti-a-coup)
 MIN_DUR = 1.0          # duree mini d'un mouvement (s)
 WORLD, TCP = "world", "tcp"
-CAPTURE_FILE = os.path.expanduser("~/dock_calib_poses.yaml")
-STEPS_DEG = [0.05, 0.1, 0.5, 1.0]   # pas de jog selectionnables (deg)
+CAPTURE_FILE = os.path.expanduser("~/roby_poses.yaml")  # fichier UNIQUE faisant autorite
+STEPS_DEG = [0.05, 0.1, 0.5, 1.0, 5.0, 10.0]   # pas de jog selectionnables (deg)
 
 D2R = 3.141592653589793 / 180.0
 R2D = 180.0 / 3.141592653589793
@@ -245,8 +245,15 @@ class FineJog(Node):
         line = "%s: [%s]" % (name, ", ".join("%.4f" % v for v in vals))
         if xyz:
             line += "   # tcp_world_m=[%.4f, %.4f, %.4f]" % xyz
-        with open(CAPTURE_FILE, "a") as f:
-            f.write(line + "\n")
+        # Remplace l'entree existante de meme nom (pas d'append => aucun doublon
+        # de cle dans le fichier autoritaire) ; conserve commentaires et autres poses.
+        old = []
+        if os.path.exists(CAPTURE_FILE):
+            old = [l for l in open(CAPTURE_FILE)
+                   if l.split(":", 1)[0].strip() != name]
+        old.append(line + "\n")
+        with open(CAPTURE_FILE, "w") as f:
+            f.write("".join(old))
         self._log("CAPTURE -> %s\n  %s" % (CAPTURE_FILE, line))
 
     def _log(self, msg, err=False):

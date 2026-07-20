@@ -28,10 +28,9 @@ from moveit_msgs.msg import (Constraints, JointConstraint, MotionPlanRequest,
 
 JOINTS = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
 GROUP = "arm"
-# Sources de poses : captures du jog + fichier dédié. roby_poses.yaml est lu EN
-# DERNIER => il fait autorité (écrase une capture périmée de même nom, ex. 'nid').
-POSES_FILES = [os.path.expanduser("~/dock_calib_poses.yaml"),
-               os.path.expanduser("~/roby_poses.yaml")]
+# Source UNIQUE de poses (fichier faisant autorité). Capture via le teach
+# pendant (roby_fine_jog, bouton Capturer) ou capture_to_poses.py.
+POSES_FILES = [os.path.expanduser("~/roby_poses.yaml")]
 DEFAULT_VEL = 0.10   # facteur d'échelle vitesse (10% du max) — lent
 DEFAULT_ACC = 0.10
 
@@ -52,10 +51,11 @@ def load_poses():
 
 
 class Seq(Node):
-    def __init__(self, vel, acc):
+    def __init__(self, vel, acc, dry=False):
         super().__init__("roby_moveit_seq")
         self.vel = vel
         self.acc = acc
+        self.dry = dry
         self.ac = ActionClient(self, MoveGroup, "/move_action")
 
     def move_to(self, name, joints):
@@ -82,7 +82,7 @@ class Seq(Node):
         goal = MoveGroup.Goal()
         goal.request = req
         opt = PlanningOptions()
-        opt.plan_only = False                       # planifie ET execute
+        opt.plan_only = self.dry                     # --dry : planifie SEULEMENT (ne bouge pas)
         opt.planning_scene_diff.is_diff = True       # utilise la scene courante (solides)
         opt.planning_scene_diff.robot_state.is_diff = True
         goal.planning_options = opt
@@ -106,6 +106,9 @@ class Seq(Node):
 def main():
     args = sys.argv[1:]
     vel, acc = DEFAULT_VEL, DEFAULT_ACC
+    dry = False
+    if "--dry" in args:
+        dry = True; args.remove("--dry")
     if "--vel" in args:
         i = args.index("--vel"); vel = float(args[i + 1]); del args[i:i + 2]
     poses = load_poses()
@@ -121,7 +124,9 @@ def main():
         print("Poses inconnues :", unknown, "\nDispo :", ", ".join(poses)); return
 
     rclpy.init()
-    n = Seq(vel, acc)
+    n = Seq(vel, acc, dry=dry)
+    if dry:
+        print("*** MODE DRY : planification seule, AUCUN mouvement ***")
     try:
         for name in args:
             if not n.move_to(name, poses[name]):
