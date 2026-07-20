@@ -20,10 +20,30 @@ from control_msgs.action import FollowJointTrajectory
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from sensor_msgs.msg import JointState
 
+import os
+sys.path.insert(0, os.path.expanduser("~"))
+from roby_oracle import LIMITS          # butees articulaires = source unique
+
 JOINTS = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
 SAFE_VEL = 0.15   # rad/s max par joint
 LEAD_IN = 2.5     # s pour atteindre la cible (doux)
 MIN_T = 2.0
+
+
+def check_limits(tgt):
+    """Refuse une cible hors butee. AJOUTE le 2026-07-20 : ce script prend 5
+    flottants en argv et ecrit DIRECTEMENT au controleur, sans passer par le garde.
+    En dessous, le SafetyMonitor C++ ne clampe qu'a +/-pi (les vraies butees URDF
+    n'y sont pas lues) : joint_3 pouvait donc partir 143 deg au-dela de sa butee
+    mecanique sur une simple faute de frappe (0.30 tape 3.0). Ici on est la SEULE
+    barriere avant les moteurs.
+    Retourne la liste des violations (vide = cible acceptable)."""
+    bad = []
+    for i, n in enumerate(JOINTS):
+        lo, hi = LIMITS[n]
+        if not (lo <= tgt[i] <= hi):
+            bad.append(f"{n} = {tgt[i]:+.4f} hors butee [{lo:+.3f}, {hi:+.3f}]")
+    return bad
 
 
 class Goto(Node):
@@ -72,6 +92,16 @@ def main():
     print("actuel :", ["%.4f" % v for v in cur])
     print("cible  :", ["%.4f" % v for v in tgt])
     print("delta max = %.4f rad  -> duree %.1fs" % (dmax, t))
+
+    # BARRIERE : rien en aval ne rattrapera une cible hors butee (ni le garde,
+    # qui est court-circuite, ni le C++ qui clampe seulement a +/-pi).
+    bad = check_limits(tgt)
+    if bad:
+        print("\n❌ CIBLE REFUSEE — hors butee articulaire :")
+        for b in bad:
+            print("   " + b)
+        print("   (rien en aval ne l'aurait arretee : ce script ecrit direct au controleur)")
+        return 1
     if not a.go:
         print("DRY : ajoute --go pour bouger."); return 0
     if not n.ac.wait_for_server(timeout_sec=10):

@@ -333,7 +333,16 @@ class Guard(Node):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--group", default="arm", help="groupe de planification MoveIt (SRDF)")
-    ap.add_argument("--max-vel", type=float, default=1.5, help="vitesse articulaire max (rad/s)")
+    # 1.0 rad/s = la limite declaree par l'URDF pour joint_1..3 (joint_4/5 sont a
+    # 2.0, donc 1.0 est conservateur pour eux). Le defaut etait 1.5 : le garde,
+    # cense etre le filtre le PLUS strict de la chaine, autorisait 50 % au-dessus
+    # de la limite materielle declaree -- et 10x ce que s'imposent tous les autres
+    # scripts (0.15). Sur un bras en boucle ouverte, depasser la vitesse declaree
+    # = pas perdus (BUG-006). Corrige le 2026-07-20.
+    ap.add_argument("--max-vel", type=float, default=1.0,
+                    help="vitesse articulaire max (rad/s). Defaut = limite URDF joint_1..3. "
+                         "Le garde CLAMPE (il ne gele pas) : une valeur plus basse ralentit, "
+                         "elle n'interrompt pas.")
     ap.add_argument("--max-step", type=float, default=0.2, help="saut absolu max par point (rad, anti-teleport ; dataset réel: saut max 0.086/pas)")
     ap.add_argument("--step-dt", type=float, default=0.2, help="le cap max-step ne s'applique qu'aux pas de dt < step-dt (s)")
     ap.add_argument("--assumed-rate", type=float, default=30.0, help="cadence supposee si le point n'a pas de time_from_start")
