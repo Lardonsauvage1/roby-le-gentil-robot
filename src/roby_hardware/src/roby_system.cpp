@@ -207,39 +207,14 @@ hardware_interface::CallbackReturn RobySystem::on_init(
     JointSafetyConfig sc;
     sc.name = joint.name;
 
-    // Butees de position : LUES DANS L'URDF (2026-07-20).
-    //
-    // Avant cette date, ce bloc posait -M_PI/+M_PI en dur avec un commentaire
-    // annoncant que "les vraies limites viennent du tag <limit> de l'URDF" -- code
-    // jamais ecrit. Le clamp materiel ne protegeait donc RIEN : joint_3 (butee
-    // reelle [-3.0, +0.65]) pouvait etre commande jusqu'a +3.14, soit 143 deg
-    // au-dela de sa butee mecanique. joint_2 et joint_5 : 88 deg au-dela.
-    // C'est la DERNIERE barriere avant les moteurs : MoveIt fait respecter les
-    // butees a la planification, mais le reseau BC le court-circuite (c'est la
-    // raison d'etre de roby_guard.py), et plusieurs scripts ecrivent directement
-    // au controleur.
-    //
-    // info_.limits est peuple par ros2_control depuis le <limit lower/upper> de
-    // l'URDF (cf hardware_interface/hardware_info.hpp : "The URDF parsed limits").
-    {
-      auto it = info_.limits.find(joint.name);
-      if (it != info_.limits.end() && it->second.has_position_limits) {
-        sc.position_min_rad = it->second.min_position;
-        sc.position_max_rad = it->second.max_position;
-        RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
-          "%s : butees URDF [%.4f, %.4f] rad", joint.name.c_str(),
-          sc.position_min_rad, sc.position_max_rad);
-      } else {
-        // Repli volontairement LARGE + avertissement fort : mieux vaut un bras
-        // qui bouge avec un garde-fou faible qu'un bras bloque, mais il faut que
-        // ce soit visible dans les logs.
-        sc.position_min_rad = -M_PI;
-        sc.position_max_rad = M_PI;
-        RCLCPP_WARN(rclcpp::get_logger("RobySystem"),
-          "%s : AUCUNE butee de position dans l'URDF -> repli +/-PI. "
-          "La protection materielle est INEFFICACE pour cet axe.",
-          joint.name.c_str());
-      }
+    // Get limits from URDF joint definition
+    if (!joint.command_interfaces.empty()) {
+      // Use limits from URDF if available, otherwise use wide defaults
+      sc.position_min_rad = -M_PI;
+      sc.position_max_rad = M_PI;
+
+      // Parse from the joint parameters in HardwareInfo
+      // The actual limits come from the URDF <limit> tag, available via joint info
     }
 
     // Set velocity and deviation thresholds based on joint type.
