@@ -63,6 +63,7 @@ from std_srvs.srv import Trigger, SetBool
 
 from lerobot.policies.diffusion.modeling_diffusion import DiffusionPolicy
 from lerobot.policies.factory import make_pre_post_processors
+from lerobot.utils.constants import OBS_STATE
 
 J = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
 
@@ -115,6 +116,30 @@ class InferCart(Node):
                 f"(attendu 6/7). Pour un modele joint (5/6), utiliser roby_infer.py.")
 
         self.policy.diffusion.num_inference_steps = a.steps
+
+        # --- TEST latence : quelles actions du horizon on execute (2026-07-22) ---
+        # generate_actions de LeRobot slice actions[:, start:end] avec start = n_obs-1
+        # (=1) : on execute le futur IMMEDIAT. Mais entre l'image et l'execution reelle
+        # il s'ecoule le calcul + le pipeline, donc ces actions correspondent a une
+        # position deja depassee -> recul regulier. --exec-offset decale ce slice :
+        # offset=8 (horizon=16) execute les 8 DERNIERES actions = compensation de
+        # latence. offset<0 => defaut LeRobot (n_obs-1), comportement d'origine.
+        horizon = int(self.policy.config.horizon)
+        nact = int(self.policy.config.n_action_steps)
+        n_obs = int(self.policy.config.n_obs_steps)
+        off = a.exec_offset if a.exec_offset >= 0 else (n_obs - 1)
+        off = max(0, min(off, horizon - nact))          # borne : le slice reste dans le horizon
+        self._exec_offset = off
+        diff = self.policy.diffusion
+        def _gen_actions(batch, noise=None, _self=diff, _off=off, _nact=nact):
+            gc = _self._prepare_global_conditioning(batch)
+            acts = _self.conditional_sample(batch[OBS_STATE].shape[0], global_cond=gc, noise=noise)
+            return acts[:, _off:_off + _nact]            # slice DECALE
+        diff.generate_actions = _gen_actions
+        self.get_logger().warn(
+            f"exec-offset = {off} (horizon={horizon}, n_action={nact}) : "
+            f"execute les actions [{off}:{off+nact}] du horizon"
+            f"{'  [DEFAUT LeRobot]' if off == n_obs-1 else '  [DECALE, compensation latence]'}")
         self.get_logger().info(
             f"img_size={self.img_size} keys={self.img_keys} state={sdim} action={adim} "
             f"num_inference_steps={a.steps}")
@@ -369,6 +394,10 @@ def main():
     ap.add_argument("--steps", type=int, default=10, help="pas de debruitage (10 = doc ; moins = plus rapide, moins bon)")
     ap.add_argument("--max-dp", type=float, default=0.05, help="deplacement TCP max par consigne (m)")
     ap.add_argument("--w-ori", type=float, default=1.0, help="poids orientation du DLS (0.5 = priorite position)")
+    ap.add_argument("--exec-offset", type=int, default=-1,
+                    help="indice de depart du slice d'actions dans le horizon. "
+                         "-1 = defaut LeRobot (futur immediat). 8 = 8 dernieres sur 16 "
+                         "(compensation de latence).")
     a = ap.parse_args()
     a.model = os.path.expanduser(a.model)
 
