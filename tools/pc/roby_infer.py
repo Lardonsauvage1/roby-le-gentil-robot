@@ -86,10 +86,11 @@ class Infer(Node):
             raise SystemExit(
                 f"❌ modele state={sdim} action={adim} : ce n'est PAS un modele joint "
                 f"(attendu 5/6). Pour un modele cartesien (6/7), utiliser roby_infer_cart.py.")
-        # latence CPU : forcer 10 pas de debruitage DDPM (doc DEPLOY_B2 : defaut 100 = trop lent CPU)
+        # Pas de debruitage : --steps (defaut 10). Certains modeles sont entraines
+        # pour MOINS (b2_perf_128 = DDIM 5 pas). Respecter la valeur d'entrainement.
         try:
-            self.policy.diffusion.num_inference_steps = 10
-            self._nsteps = 10
+            self.policy.diffusion.num_inference_steps = a.steps
+            self._nsteps = a.steps
         except Exception as e:
             self._nsteps = None
             self.get_logger().warn(f"num_inference_steps non force: {e}")
@@ -270,7 +271,8 @@ def main():
     ap.add_argument("--model", required=True, help="chemin checkpoint LeRobot (brut/ ou ema/)")
     ap.add_argument("--go", action="store_true", help="PUBLIE vers le garde (sinon DRY : infere sans publier)")
     ap.add_argument("--arm-gate", action="store_true", help="demarre DESARME : ne publie que si armé via /roby_infer/arm")
-    ap.add_argument("--hz", type=float, default=15.0, help="cadence de controle (defaut 15 = cadence dataset, NE PAS changer)")
+    ap.add_argument("--hz", type=float, default=15.0, help="cadence de controle = fps du DATASET d'entrainement (15 par defaut ; b2_perf_128 = 10)")
+    ap.add_argument("--steps", type=int, default=10, help="pas de debruitage (10 ; b2_perf_128 DDIM = 5)")
     ap.add_argument("--img-size", type=int, default=0, help="resolution image (0=auto depuis la config du modele ; b2=96 ou 128)")
     a = ap.parse_args()
     a.model = os.path.expanduser(a.model)
