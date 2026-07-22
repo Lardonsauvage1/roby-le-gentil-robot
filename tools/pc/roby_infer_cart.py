@@ -115,6 +115,16 @@ class InferCart(Node):
                 f"❌ modele state={sdim} action={adim} : ce n'est PAS un modele cartesien "
                 f"(attendu 6/7). Pour un modele joint (5/6), utiliser roby_infer.py.")
 
+        # Acceleration OpenVINO (iGPU Arc / NPU) : remplace le U-Net. Sur ce PC le CPU
+        # deborde du cache pour les gros modeles ; l'iGPU les rend temps-reel (x12).
+        if a.igpu:
+            import os as _os
+            from roby_ov import patch_policy_igpu
+            ok, msg = patch_policy_igpu(self.policy, _os.path.dirname(a.model.rstrip("/")),
+                                        device=a.igpu, logger=self.get_logger())
+            if not ok:
+                raise SystemExit(f"❌ --igpu {a.igpu} : {msg}")
+
         self.policy.diffusion.num_inference_steps = a.steps
 
         # --- TEST latence : quelles actions du horizon on execute (2026-07-22) ---
@@ -394,6 +404,9 @@ def main():
     ap.add_argument("--steps", type=int, default=10, help="pas de debruitage (10 = doc ; moins = plus rapide, moins bon)")
     ap.add_argument("--max-dp", type=float, default=0.05, help="deplacement TCP max par consigne (m)")
     ap.add_argument("--w-ori", type=float, default=1.0, help="poids orientation du DLS (0.5 = priorite position)")
+    ap.add_argument("--igpu", default="", metavar="DEVICE",
+                    help="porte le U-Net sur un accelerateur OpenVINO : GPU (iGPU Arc), NPU, ou CPU. "
+                         "Vide = torch CPU (defaut). Debloque les GROS modeles (263M : 2061ms CPU -> 170ms iGPU).")
     ap.add_argument("--exec-offset", type=int, default=-1,
                     help="indice de depart du slice d'actions dans le horizon. "
                          "-1 = defaut LeRobot (futur immediat). 8 = 8 dernieres sur 16 "
