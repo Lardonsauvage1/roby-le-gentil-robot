@@ -233,6 +233,8 @@ class InferCart(Node):
                 "observation.state": state}
 
     def _infer_loop(self):
+        if self.a.sync:
+            return self._infer_loop_sync()
         period = 1.0 / self.hz
         while self.run:
             if not self.armed:
@@ -272,6 +274,49 @@ class InferCart(Node):
             dt = time.perf_counter() - t0
             if dt < period:
                 time.sleep(period - dt)
+
+    def _infer_loop_sync(self):
+        """Mode SENSE-PLAN-ACT (--sync) : un lot de n_action_steps actions est genere
+        sur une image FRAICHE, publie en entier, PUIS on re-infere sur une nouvelle
+        image. Le bras tient sa pose pendant l'inference (pause). Contrairement au
+        pipeline async, le modele ne raisonne jamais sur des images perimees."""
+        nact = int(self.policy.config.n_action_steps)
+        self.get_logger().warn(
+            f"mode SYNC : lots de {nact} actions sur image fraiche, pause pendant l'inference.")
+        while self.run:
+            if not self.armed:
+                time.sleep(0.05); continue
+            with self.lock:
+                pending = len(self.buf)
+            if pending > 0:                    # les actions du lot precedent ne sont pas finies
+                time.sleep(0.01); continue
+            try:
+                obs = self._get_obs()          # image capturee MAINTENANT
+                if obs is None:
+                    time.sleep(0.05); continue
+                t0 = time.perf_counter()
+                self.policy.reset()            # le lot se calcule sur l'obs fraiche seule
+                chunk = []
+                with torch.no_grad():
+                    for _ in range(nact):
+                        a = self.post(self.policy.select_action(self.pre(obs)))
+                        chunk.append(a.squeeze(0).cpu().numpy())
+                self.inf_ms = (time.perf_counter() - t0) * 1000
+                self.inf_heavy_ms = self.inf_ms
+                with self.lock:
+                    for a in chunk:
+                        self.buf.append(a)
+                    self.last_pred = chunk[0]
+                self.n_err = 0
+            except Exception as e:
+                self.n_err += 1; self.n_err_total += 1
+                self.get_logger().error(
+                    f"inference EN ECHEC ({self.n_err}/{self.MAX_ERR}) : {type(e).__name__}: {e}")
+                if self.n_err >= self.MAX_ERR:
+                    self.armed = False
+                    with self.lock: self.buf.clear()
+                    self.get_logger().error(f"{self.MAX_ERR} echecs -> DESARMEMENT AUTOMATIQUE.")
+                time.sleep(0.1)
 
     def _publish_tick(self):
         if not self.armed:
@@ -404,6 +449,11 @@ def main():
     ap.add_argument("--steps", type=int, default=10, help="pas de debruitage (10 = doc ; moins = plus rapide, moins bon)")
     ap.add_argument("--max-dp", type=float, default=0.05, help="deplacement TCP max par consigne (m)")
     ap.add_argument("--w-ori", type=float, default=1.0, help="poids orientation du DLS (0.5 = priorite position)")
+    ap.add_argument("--sync", action="store_true",
+                    help="mode SENSE-PLAN-ACT : infere 1 lot de 8 actions sur image FRAICHE, "
+                         "les execute TOUTES, puis re-infere sur nouvelle image. Cree une pause "
+                         "pendant chaque inference (~250ms iGPU) mais le modele raisonne toujours "
+                         "sur des images a jour (mode d'entrainement). Defaut = async (pipeline continu).")
     ap.add_argument("--igpu", default="", metavar="DEVICE",
                     help="porte le U-Net sur un accelerateur OpenVINO : GPU (iGPU Arc), NPU, ou CPU. "
                          "Vide = torch CPU (defaut). Debloque les GROS modeles (263M : 2061ms CPU -> 170ms iGPU).")
