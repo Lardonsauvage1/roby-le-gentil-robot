@@ -1,0 +1,596 @@
+"""leader_node — publie l'etat du bras guide et expose le controle de son couple (US-018).
+
+Ce noeud est le SEUL proprietaire du bus serie du leader. Tout le reste de la stack
+passe par ses topics et ses services : le projet a deja paye cher d'avoir deux maitres
+sur un meme bus (contention I2C sur le PCA9685, servos muets, diagnostic long).
+Un verrou exclusif sur le port fait respecter la regle plutot que de l'esperer.
+
+Le noeud demarre COUPLE COUPE et coupe le couple a l'arret, y compris sur Ctrl-C :
+le bras guide se manipule a la main, l'activation du couple est un acte explicite.
+
+Aucune commande n'est envoyee vers le vrai bras Roby : ce noeud ne fait que lire le
+leader et gerer son couple.
+
+Lancement (ROS 2 et LeRobot doivent coexister dans le meme interpreteur) :
+    bash ~/roby_leader_node.sh
+    bash ~/roby_leader_node.sh --sim        # aucun materiel requis
+"""
+
+from __future__ import annotations
+
+import functools
+import math
+import os
+import subprocess
+import xml.etree.ElementTree as ET
+
+import rclpy
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from rcl_interfaces.msg import SetParametersResult
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+from std_srvs.srv import SetBool
+
+from roby_control.leader_joystick import cible_de_rappel, commande_axe
+from roby_control.leader_mapping import charger as charger_calib
+from roby_control.leader_bus import (
+    LeaderBus,
+    rad_to_steps,
+    LeaderBusError,
+    PortAlreadyOwned,
+    PortUnavailable,
+    TORQUE_LIMIT_MAX,
+    steps_to_rad,
+    telemetry_warnings,
+)
+
+# Noms du LEADER, pas ceux de Roby : ce topic porte des angles bruts du bras guide.
+# Les noms URDF (joint_1...) n'apparaissent qu'APRES conversion (US-019), sinon on
+# croit lire un angle de Roby alors qu'il n'a ete ni signe, ni decale, ni mis a l'echelle.
+DEFAULT_JOINTS = ["axe_1_base", "axe_2_epaule", "axe_3_coude",
+                  "axe_4_poignet", "axe_5_rot_poignet", "pince"]
+DEFAULT_IDS = [1, 2, 3, 4, 5, 6]
+FAILS_BEFORE_STALE = 5  # lectures ratees consecutives avant de declarer le bus perdu
+
+
+
+def verifier_interface_dds():
+    """L'interface Ethernet declaree dans la config DDS doit etre operationnelle.
+
+    ERREUR BLOQUANTE si elle ne l'est pas. Aucun repli n'est propose — ni Wi-Fi, ni
+    boucle locale : un repli silencieux donnerait une stack qui a l'air de fonctionner
+    alors qu'elle ne parle pas au Pi5. Le cablage se corrige, il ne se contourne pas.
+
+    Retourne le nom de l'interface validee.
+    """
+    uri = os.environ.get("CYCLONEDDS_URI", "")
+    if not uri:
+        raise SystemExit(
+            "ERREUR BLOQUANTE : CYCLONEDDS_URI n'est pas defini.\n"
+            "Le noeud doit tourner sur le reseau du projet. Lancer via "
+            "~/roby_leader_node.sh, qui charge ~/cyclone_config.xml."
+        )
+    chemin = uri.replace("file://", "")
+    if not os.path.exists(chemin):
+        raise SystemExit("ERREUR BLOQUANTE : config DDS introuvable : %s" % chemin)
+
+    try:
+        racine = ET.parse(chemin).getroot()
+    except ET.ParseError as e:
+        raise SystemExit("ERREUR BLOQUANTE : config DDS illisible (%s) : %s" % (chemin, e))
+
+    noms = [el.get("name") for el in racine.iter()
+            if el.tag.endswith("NetworkInterface") and el.get("name")]
+    if not noms:
+        raise SystemExit(
+            "ERREUR BLOQUANTE : aucune <NetworkInterface> declaree dans %s.\n"
+            "L'interface du lien PC <-> Pi5 doit y etre nommee explicitement." % chemin
+        )
+
+    for nom in noms:
+        base = "/sys/class/net/%s" % nom
+        if not os.path.isdir(base):
+            raise SystemExit(
+                "ERREUR BLOQUANTE : l'interface '%s' declaree dans %s n'existe pas sur "
+                "cette machine.\nInterfaces disponibles : %s\n"
+                "=> Corriger la config DDS, ou brancher la bonne carte."
+                % (nom, chemin, ", ".join(sorted(os.listdir("/sys/class/net"))))
+            )
+        try:
+            with open(base + "/operstate") as f:
+                etat = f.read().strip()
+            with open(base + "/carrier") as f:
+                porteuse = f.read().strip()
+        except OSError:
+            etat, porteuse = "inconnu", "0"
+        if etat != "up" or porteuse != "1":
+            raise SystemExit(
+                "ERREUR BLOQUANTE : l'interface Ethernet '%s' n'est pas operationnelle "
+                "(operstate=%s, carrier=%s).\n"
+                "Le bras guide doit tourner sur le reseau CABLE du projet, jamais en "
+                "Wi-Fi ni en boucle locale.\n"
+                "=> BRANCHER le cable Ethernet sur '%s' et verifier qu'il obtient une "
+                "adresse en 192.168.2.x, puis relancer.\n"
+                "Ce n'est pas a contourner : un repli silencieux donnerait une stack qui "
+                "semble marcher sans parler au Pi5." % (nom, etat, porteuse, nom)
+            )
+        adresses = [
+            ligne for ligne in
+            subprocess.run(["ip", "-4", "-brief", "addr", "show", nom],
+                           capture_output=True, text=True).stdout.split()
+            if "." in ligne
+        ]
+        if not adresses:
+            raise SystemExit(
+                "ERREUR BLOQUANTE : l'interface '%s' est active mais n'a AUCUNE adresse "
+                "IPv4.\n=> Verifier la configuration reseau (192.168.2.x attendu)." % nom
+            )
+    return noms[0]
+
+
+class LeaderNode(Node):
+    def __init__(self):
+        super().__init__("leader_node")
+
+        self.declare_parameter("port", "/dev/roby_leader")
+        self.declare_parameter("baud", 1_000_000)
+        self.declare_parameter("ids", DEFAULT_IDS)
+        self.declare_parameter("joint_names", DEFAULT_JOINTS)
+        self.declare_parameter("publish_rate_hz", 100.0)
+        self.declare_parameter("telemetry_rate_hz", 1.0)
+        self.declare_parameter("simulate", False)
+        self.declare_parameter("torque_limit", TORQUE_LIMIT_MAX)
+        # --- mode joystick (rappel elastique vers le zero + consigne de vitesse) ---
+        self.declare_parameter("calib_file", "")
+        self.declare_parameter("joystick_deadzone_deg", 5.0)
+        # Couple max par AXE (aligne sur `ids`). Une seule valeur = la meme partout.
+        # Les axes porteurs (epaule, coude) en demandent plus : ramener au neutre exige
+        # de SOULEVER le bras, bien plus que de le maintenir.
+        self.declare_parameter("joystick_torque_max_pct", [10.0])
+        # Couple DES LA SORTIE de la zone morte (0 = demarrage progressif depuis zero).
+        # Sans plancher, il existe une bande ou le rappel est actif mais trop faible pour
+        # vaincre le frottement : le bras y stagne.
+        self.declare_parameter("joystick_torque_min_pct", [0.0])
+        # Ecart maximal demande au servo en une fois (pas).
+        # /!\ Ce n'est PAS qu'un garde-fou : le servo produit un couple proportionnel a
+        # son ERREUR de position, donc cette borne plafonne aussi la force du rappel.
+        # Trop petite, elle bride le couple bien avant `Torque_Limit` — vecu le
+        # 2026-09-05 : l'epaule ne demandait que 46 de charge avec une limite a 250.
+        # La valeur etait basse pour empecher de franchir le bouclage ; depuis le
+        # recentrage des codeurs, plus aucun axe ne le franchit.
+        self.declare_parameter("joystick_pas_max", 800)
+        self.declare_parameter("joystick_rate_hz", 20.0)
+        # Garde anti-emballement : au-dela de cette vitesse mesuree, on coupe tout.
+        self.declare_parameter("joystick_vitesse_max_dps", 300.0)
+
+        g = self.get_parameter
+        self.ids = list(g("ids").value)
+        self.joint_names = list(g("joint_names").value)
+        # Si l'appelant restreint les IDs sans redonner les noms (cas courant : la pince
+        # n'est pas chainee), on derive les noms des IDs plutot que d'exiger la liste.
+        if self.joint_names == DEFAULT_JOINTS and len(self.ids) != len(DEFAULT_JOINTS):
+            self.joint_names = [
+                DEFAULT_JOINTS[i - 1] if 1 <= i <= len(DEFAULT_JOINTS) else "id_%d" % i
+                for i in self.ids
+            ]
+        self.simulate = bool(g("simulate").value)
+        if len(self.ids) != len(self.joint_names):
+            raise ValueError(
+                "ids (%d) et joint_names (%d) doivent avoir la meme longueur"
+                % (len(self.ids), len(self.joint_names))
+            )
+        self.name_of = dict(zip(self.ids, self.joint_names))
+
+        self.bus = LeaderBus(
+            port=g("port").value, baud=int(g("baud").value),
+            ids=self.ids, simulate=self.simulate,
+        )
+        try:
+            self.bus.open()
+        except PortAlreadyOwned as e:
+            self.get_logger().fatal(
+                "%s\nUne seule instance de leader_node peut detenir le bus. "
+                "Arreter l'autre avant de relancer." % e
+            )
+            raise
+        except PortUnavailable as e:
+            self.get_logger().fatal(
+                "%s\nVerifier que la carte est branchee (/dev/roby_leader, regle udev) "
+                "et que l'alimentation 7,4 V debite bien (mode CV, pas CC)." % e
+            )
+            raise
+
+        if self.simulate:
+            self.get_logger().warn(
+                "MODE SIMULATION : aucun materiel n'est lu, les positions sont "
+                "synthetiques. Ne pas en tirer de conclusion sur le vrai bras."
+            )
+        else:
+            present = self.bus.ping_all()
+            manquants = [i for i in self.ids if i not in present]
+            if manquants:
+                self.get_logger().error(
+                    "Servos attendus mais absents du bus : %s (presents : %s). "
+                    "Verifier le chainage et l'alimentation." % (manquants, present)
+                )
+            else:
+                self.get_logger().info("Les %d servos repondent : %s"
+                                       % (len(present), present))
+
+        # Etat sur : le couple est coupe au demarrage, quel que soit l'etat precedent.
+        echecs = self.bus.set_torque(False)
+        if echecs:
+            self.get_logger().error("Couple NON coupe sur %s au demarrage !" % echecs)
+        else:
+            self.get_logger().info("Couple coupe sur tous les servos (etat de depart sur).")
+        self._apply_torque_limit(int(g("torque_limit").value), initial=True)
+
+        self.pub_js = self.create_publisher(JointState, "/leader/joint_states", 10)
+        self.pub_tel = self.create_publisher(DiagnosticArray, "/leader/telemetry", 5)
+
+        self.srv_torque = self.create_service(
+            SetBool, "/leader/set_torque", self._srv_set_torque_all
+        )
+        self.srv_joint = [
+            self.create_service(
+                SetBool, "/leader/%s/set_torque" % name,
+                functools.partial(self._srv_set_torque_one, sid),
+            )
+            for sid, name in self.name_of.items()
+        ]
+        self.add_on_set_parameters_callback(self._on_param)
+
+        rate = max(1.0, float(g("publish_rate_hz").value))
+        trate = max(0.1, float(g("telemetry_rate_hz").value))
+        self.timer_js = self.create_timer(1.0 / rate, self._tick_positions)
+        self.timer_tel = self.create_timer(1.0 / trate, self._tick_telemetry)
+
+        # ---- mode joystick ----
+        self.joy_actif = False
+        self.joy_deadzone = math.radians(float(g("joystick_deadzone_deg").value))
+        pcts = list(g("joystick_torque_max_pct").value)
+        if len(pcts) == 1:
+            pcts = pcts * len(self.ids)
+        if len(pcts) != len(self.ids):
+            raise ValueError("joystick_torque_max_pct : %d valeurs pour %d axes"
+                             % (len(pcts), len(self.ids)))
+        self.joy_couple_max = {
+            sid: int(TORQUE_LIMIT_MAX * float(p) / 100.0)
+            for sid, p in zip(self.ids, pcts)
+        }
+        self.joy_pas_max = int(g("joystick_pas_max").value)
+        mins = list(g("joystick_torque_min_pct").value)
+        if len(mins) == 1:
+            mins = mins * len(self.ids)
+        self.joy_couple_min = {sid: int(TORQUE_LIMIT_MAX * float(m) / 100.0)
+                               for sid, m in zip(self.ids, mins)}
+        self.joy_vmax = math.radians(float(g("joystick_vitesse_max_dps").value))
+        self._joy_prev = None
+        self._joy_dernier_couple = {}
+        chemin = g("calib_file").value or None
+        try:
+            self.cal = charger_calib(chemin)
+            manquants = self.cal.non_calibres()
+            if manquants:
+                self.get_logger().warn(
+                    "Calibration incomplete pour %s : le mode joystick refusera de "
+                    "demarrer sur ces axes." % manquants
+                )
+            else:
+                self.get_logger().info(
+                    "Calibration chargee : %d articulations." % len(self.cal.joints))
+        except Exception as e:  # noqa: BLE001
+            self.cal = None
+            self.get_logger().warn(
+                "Calibration illisible (%s) : mode joystick indisponible." % e)
+
+        self.pub_joy = self.create_publisher(JointState, "/leader/joystick", 10)
+        self.srv_joy = self.create_service(
+            SetBool, "/leader/joystick", self._srv_joystick)
+        self.timer_joy = self.create_timer(
+            1.0 / max(1.0, float(g("joystick_rate_hz").value)), self._tick_joystick)
+
+        self._fails = 0
+        self._stale = False
+        self._dernier_pos = None
+        self.get_logger().info(
+            "leader_node pret : %d articulations, publication a %.0f Hz, "
+            "telemetrie a %.1f Hz." % (len(self.ids), rate, trate)
+        )
+
+    # ------------------------------------------------------------------ boucles
+    def _tick_positions(self):
+        try:
+            pos = self.bus.read_positions()
+        except LeaderBusError as e:
+            self._fails += 1
+            if self._fails == FAILS_BEFORE_STALE:
+                self._stale = True
+                self.get_logger().error(
+                    "Bus du leader perdu apres %d lectures en echec (%s). "
+                    "Publication SUSPENDUE : mieux vaut pas de donnee qu'une donnee "
+                    "perimee." % (self._fails, e)
+                )
+            return
+        if self._stale:
+            self.get_logger().info("Bus du leader retrouve, publication reprise.")
+        self._fails, self._stale = 0, False
+        self._dernier_pos = pos
+
+        msg = JointState()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.name = [self.name_of[sid] for sid in self.ids]
+        msg.position = [steps_to_rad(pos[sid]) for sid in self.ids]
+        self.pub_js.publish(msg)
+
+    def _tick_telemetry(self):
+        if self._stale:
+            return
+        try:
+            tel = self.bus.read_telemetry()
+        except LeaderBusError as e:
+            self.get_logger().warn("Telemetrie illisible : %s" % e)
+            return
+        arr = DiagnosticArray()
+        arr.header.stamp = self.get_clock().now().to_msg()
+        for sid in self.ids:
+            t = tel[sid]
+            warns = telemetry_warnings(sid, t)
+            for w in warns:
+                self.get_logger().warn(w)
+            st = DiagnosticStatus()
+            st.name = "leader/%s" % self.name_of[sid]
+            st.hardware_id = "sts3215_id%d" % sid
+            st.level = DiagnosticStatus.WARN if warns else DiagnosticStatus.OK
+            st.message = " ; ".join(warns) if warns else "OK"
+            st.values = [
+                KeyValue(key="tension_V",
+                         value="%.1f" % (t["volt_dV"] / 10.0) if t["volt_dV"] is not None else "?"),
+                KeyValue(key="temperature_C", value=str(t["temp_C"])),
+                KeyValue(key="charge", value=str(t["load"])),
+                KeyValue(key="couple", value="ON" if t["torque_on"] else "OFF"),
+            ]
+            arr.status.append(st)
+        self.pub_tel.publish(arr)
+
+    # ------------------------------------------------------------------ services
+    def _srv_set_torque_all(self, req, resp):
+        echecs = self.bus.set_torque(req.data)
+        resp.success = not echecs
+        etat = "ACTIVE" if req.data else "coupe"
+        resp.message = ("couple %s sur les %d servos" % (etat, len(self.ids))
+                        if not echecs else "echec sur les servos %s" % echecs)
+        if req.data:
+            self.get_logger().warn("/leader/set_torque -> %s" % resp.message)
+        else:
+            self.get_logger().info("/leader/set_torque -> %s" % resp.message)
+        return resp
+
+    def _srv_set_torque_one(self, sid, req, resp):
+        echecs = self.bus.set_torque(req.data, ids=[sid])
+        resp.success = not echecs
+        resp.message = ("couple %s sur %s (ID %d)"
+                        % ("ACTIVE" if req.data else "coupe", self.name_of[sid], sid)
+                        if not echecs else "echec sur l'ID %d" % sid)
+        self.get_logger().info("/leader/%s/set_torque -> %s"
+                               % (self.name_of[sid], resp.message))
+        return resp
+
+    def _apply_torque_limit(self, value, initial=False):
+        echecs = self.bus.set_torque_limit(value)
+        if echecs:
+            self.get_logger().error("Limite de couple NON appliquee sur %s" % echecs)
+            return False
+        self.get_logger().info(
+            "Limite de couple %s a %d/%d (%.0f %%)"
+            % ("initialisee" if initial else "reglee", value, TORQUE_LIMIT_MAX,
+               100.0 * value / TORQUE_LIMIT_MAX)
+        )
+        return True
+
+    def _regler_couples(self, pcts):
+        """Applique une liste de pourcentages (1 valeur = la meme partout)."""
+        pcts = list(pcts)
+        if len(pcts) == 1:
+            pcts = pcts * len(self.ids)
+        if len(pcts) != len(self.ids):
+            return False, "%d valeurs pour %d axes" % (len(pcts), len(self.ids))
+        if any(not 0.0 <= float(p) <= 100.0 for p in pcts):
+            return False, "pourcentages hors de 0..100"
+        self.joy_couple_max = {sid: int(TORQUE_LIMIT_MAX * float(p) / 100.0)
+                               for sid, p in zip(self.ids, pcts)}
+        self._joy_dernier_couple = {}   # force la reecriture au prochain cycle
+        return True, ", ".join("%s %.0f%%" % (self.name_of[s], p)
+                               for s, p in zip(self.ids, pcts))
+
+    def _on_param(self, params):
+        """La limite de couple se regle par parametre (donc par le service standard
+        set_parameters) : c'est un reglage, pas une action. Utilise par US-022."""
+        for p in params:
+            if p.name == "joystick_pas_max":
+                v = int(p.value)
+                if not 10 <= v <= 2048:
+                    return SetParametersResult(successful=False,
+                                               reason="joystick_pas_max hors de 10..2048")
+                self.joy_pas_max = v
+                self.get_logger().warn("ecart de rappel max -> %d pas (%.0f deg)"
+                                       % (v, v * 360.0 / 4096))
+                continue
+            if p.name == "joystick_torque_min_pct":
+                vals = list(p.value)
+                if len(vals) == 1:
+                    vals = vals * len(self.ids)
+                if len(vals) != len(self.ids) or any(not 0.0 <= float(v) <= 100.0 for v in vals):
+                    return SetParametersResult(
+                        successful=False, reason="joystick_torque_min_pct invalide")
+                self.joy_couple_min = {sid: int(TORQUE_LIMIT_MAX * float(v) / 100.0)
+                                       for sid, v in zip(self.ids, vals)}
+                self._joy_dernier_couple = {}
+                self.get_logger().warn("couple MIN joystick -> [%s]"
+                                       % ", ".join("%s %.0f%%" % (self.name_of[s2], v)
+                                                   for s2, v in zip(self.ids, vals)))
+                continue
+            if p.name == "joystick_torque_max_pct":
+                # Reglable a CHAUD : on monte le couple par paliers en observant le bras,
+                # sans relancer le noeud ni repasser par la sequence d'activation.
+                ok, detail = self._regler_couples(p.value)
+                if not ok:
+                    return SetParametersResult(successful=False, reason=detail)
+                self.get_logger().warn("couple joystick -> [%s]" % detail)
+                continue
+            if p.name != "torque_limit":
+                continue
+            if not 0 <= p.value <= TORQUE_LIMIT_MAX:
+                return SetParametersResult(
+                    successful=False,
+                    reason="torque_limit hors plage 0..%d" % TORQUE_LIMIT_MAX,
+                )
+            if not self._apply_torque_limit(int(p.value)):
+                return SetParametersResult(successful=False,
+                                           reason="ecriture refusee par un servo")
+        return SetParametersResult(successful=True)
+
+    # ------------------------------------------------------------------ joystick
+    def _srv_joystick(self, req, resp):
+        if req.data:
+            ok, msg = self._joystick_on()
+        else:
+            ok, msg = self._joystick_off()
+        resp.success, resp.message = ok, msg
+        # Deux appels DISTINCTS : rclpy indexe ses journaux par site d'appel et leve
+        # "Logger severity cannot be changed between calls" si un meme site alterne
+        # entre warn et info. Vecu le 2026-09-05 -> le noeud plantait a la COUPURE du
+        # mode, c'est-a-dire au pire moment : un crash laisse le couple actif.
+        if req.data:
+            self.get_logger().warn("/leader/joystick -> %s" % msg)
+        else:
+            self.get_logger().info("/leader/joystick -> %s" % msg)
+        return resp
+
+    def _joystick_on(self):
+        if self.cal is None or self.cal.non_calibres():
+            return False, "calibration absente ou incomplete : mode refuse"
+        if self._stale or self._dernier_pos is None:
+            return False, "positions indisponibles : mode refuse"
+        # Sequence en 3 temps, pour qu'aucun a-coup ne soit possible :
+        #   1. couple ON en figeant la cible sur la position ACTUELLE (aucun mouvement)
+        #   2. couple plafonne au minimum
+        #   3. cible = zero -> le bras part vers le neutre, doucement
+        echecs = self.bus.set_torque(True)
+        if echecs:
+            return False, "couple non active sur %s" % echecs
+        self.bus.set_torque_limit(0)
+        # La cible est desormais calculee a chaque cycle (elle SUIT le bras) : on ne vise
+        # plus jamais le zero absolu, qui faisait partir l'epaule et le poignet par le
+        # chemin long, soit 71 % de tour a l'envers (2026-09-05).
+        self._joy_dernier_couple = {}
+        self._joy_prev = None
+        self.joy_actif = True
+        detail = ", ".join("%s %.0f%%" % (self.name_of[sid],
+                                          100.0 * c / TORQUE_LIMIT_MAX)
+                           for sid, c in self.joy_couple_max.items())
+        return True, ("mode joystick ACTIF : rappel vers le zero par le plus court "
+                      "chemin, zone morte %.1f deg, couple max par axe [%s]"
+                      % (math.degrees(self.joy_deadzone), detail))
+
+    def _joystick_off(self):
+        self.joy_actif = False
+        self.bus.set_torque_limit(TORQUE_LIMIT_MAX)
+        echecs = self.bus.set_torque(False)
+        return (not echecs), ("mode joystick coupe, bras libre"
+                              if not echecs else "couple NON coupe sur %s" % echecs)
+
+    def _sid_de(self, nom_leader):
+        for sid, nom in self.name_of.items():
+            if nom == nom_leader:
+                return sid
+        return None
+
+    def _tick_joystick(self):
+        if not self.joy_actif or self._dernier_pos is None:
+            return
+        pos, t = self._dernier_pos, self.get_clock().now().nanoseconds * 1e-9
+
+        # --- garde anti-emballement ---
+        if self._joy_prev is not None:
+            dt = t - self._joy_prev[1]
+            if dt > 1e-3:
+                for sid, p in pos.items():
+                    dp = abs((steps_to_rad(p) - steps_to_rad(self._joy_prev[0][sid])
+                              + math.pi) % (2 * math.pi) - math.pi)
+                    if dp / dt > self.joy_vmax:
+                        self._joystick_off()
+                        self.get_logger().error(
+                            "EMBALLEMENT sur l'ID %d (%.0f deg/s > %.0f) : mode joystick "
+                            "COUPE par securite." % (sid, math.degrees(dp / dt),
+                                                     math.degrees(self.joy_vmax)))
+                        return
+        self._joy_prev = (dict(pos), t)
+
+        msg = JointState()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        cibles = {}
+        for j in self.cal.joints:
+            sid = self._sid_de(j.nom_leader)
+            if sid is None or sid not in pos:
+                continue
+            v, couple = commande_axe(j, steps_to_rad(pos[sid]), self.joy_deadzone,
+                                     self.joy_couple_max[sid],
+                                     self.joy_couple_min.get(sid, 0))
+            msg.name.append(j.nom_urdf)
+            msg.velocity.append(v)
+            # Cible recalculee a chaque cycle : elle suit le bras, toujours dans la
+            # direction du plus court chemin vers le zero, et jamais a plus de
+            # `joystick_pas_max`.
+            cible = cible_de_rappel(
+                pos[sid], rad_to_steps(j.zero), self.joy_pas_max,
+                int(self.joy_deadzone * 4096 / (2 * math.pi)))
+            cibles[sid] = cible
+            # On n'ecrit le couple que s'il change : inutile de saturer le bus.
+            if self._joy_dernier_couple.get(sid) != couple:
+                self.bus.set_torque_limit(couple, ids=[sid])
+                self._joy_dernier_couple[sid] = couple
+        if cibles:
+            self.bus.set_goal_position(cibles)
+        self.pub_joy.publish(msg)
+
+    # ------------------------------------------------------------------ arret
+    def shutdown(self):
+        """Couple coupe AVANT fermeture du port — y compris sur Ctrl-C."""
+        try:
+            self.joy_actif = False
+            self.bus.set_torque_limit(TORQUE_LIMIT_MAX)
+            echecs = self.bus.set_torque(False)
+            if echecs:
+                self.get_logger().error(
+                    "ATTENTION : couple NON coupe sur %s a l'arret !" % echecs
+                )
+            else:
+                self.get_logger().info("Couple coupe, bras guide libre a la main.")
+        except Exception as e:  # noqa: BLE001 - on ferme le port quoi qu'il arrive
+            self.get_logger().error("Coupure du couple impossible a l'arret : %s" % e)
+        finally:
+            self.bus.close()
+
+
+def main(args=None):
+    iface = verifier_interface_dds()
+    print("[leader_node] interface DDS validee : %s (lien cable du projet)" % iface,
+          flush=True)
+    rclpy.init(args=args)
+    node = None
+    try:
+        node = LeaderNode()
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if node is not None:
+            node.shutdown()
+            node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

@@ -67,20 +67,43 @@ D_XYZ = tuple(float(v) for v in fk_pos(D_JOINTS))     # en repere FK (coherent D
 R_GRASP = fkT(D_JOINTS)[:3, :3]                        # orientation de prise (top-down)
 _AZI_D = float(np.arctan2(D_XYZ[1], D_XYZ[0]))         # azimut base->D (repere du grasp-azimut)
 
-# Plan physique (roby_environments/atelier_actuel.yaml) : borne dure anti-hors-table.
-TABLE_PHYS = {"x": (-0.258, 1.043), "y": (-0.218, 0.543)}
+# ---------------------------------------------------------------------------
+# ZONE DE TRAVAIL — CUISINE (2026-09-06). Remplace l'ancienne table de l'atelier.
+# Bornee par trois obstacles reels de la scene `cuisine` :
+#   X : bord de la structure sous le robot (+0.19) -> aplomb du refrigerateur (+0.89)
+#   Y : bord du refrigerateur (-0.56)              -> bord de la plaque de cuisson (+0.10)
+# Retrait supplementaire de 5 cm cote robot, puis TABLE_MARGIN de 10 cm sur les 4 bords
+# (demande de Sam) => zone effective 45 x 46 cm : X +0.34..+0.79, Y -0.46..0.00.
+# Ancienne zone atelier (conservee pour memoire) : x (-0.258, 1.043), y (-0.218, 0.543).
+TABLE_PHYS = {"x": (0.24, 0.89), "y": (-0.56, 0.10)}
 # Zone de tirage = TOUTE la table sauf : marge aux bords, disque autour de la base
 # robot, et disque d'exclusion autour du point de depose D (demande Sam 2026-07-11).
-TABLE_MARGIN = 0.05               # marge a chaque bord de table (m) : jamais colle au bord
+TABLE_MARGIN = 0.10               # marge a chaque bord (m) — 10 cm demandes par Sam pour la
+                                  # zone cuisine, contre 5 cm sur l'ancienne table.
 D_KEEPOUT = 0.05                  # rayon d'exclusion autour de D (m) : R jamais < 5cm de D
 BASE_KEEPOUT = 0.30               # rayon d'exclusion autour de la base robot (origine)
-# Socle 'base_robot' (atelier_actuel.yaml) : box size[0.515,0.875] centre (0.0,0.0925).
-# = le bloc juste sous le bras -> on exclut son empreinte au sol + marge.
+# Empreinte au sol du SUPPORT sous le bras -> exclue du tirage.
+# Cuisine (2026-09-06) : support reel mesure, X -0.247..+0.248, Y -0.287..+0.559.
+# (atelier, pour memoire : centre (0.00, 0.0925), demi-dimensions 0.2575 x 0.4375)
 BLOCK_MARGIN = 0.05
-_BLK_C = (0.00, 0.0925)
-_BLK_HALF = (0.515 / 2, 0.875 / 2)
+_BLK_C = (0.0005, 0.136)
+_BLK_HALF = (0.4950 / 2, 0.846 / 2)
 LIFT = 0.05                       # point d'approche 5cm AU-DESSUS de la CIBLE (avant : 10cm)
 AERIEN_DZ = (0.18, 0.30)          # hauteur aerienne = z de D + [min,max]
+
+# --- Scenario RATTRAPAGE (--recovery, 2026-07-22, demande Sam) ---
+# Episodes ou le bras DEMARRE a cote de la pomme, AU RAS de la table, pince ouverte
+# (comme s'il avait rate la prise), puis se releve un peu, se recale au-dessus,
+# ramasse, et amene a la cible. Apprend la RECUPERATION : le reseau finit souvent
+# JUSTE a cote de la pomme (variabilite observee le 2026-07-22) => sans demo de
+# rattrapage il reste bloque a cote.
+# decalage horizontal "rate" vs la pomme (m), tire uniforme. Reglable via
+# ROBY_RECOVERY_OFFSET="min,max" (ex : "0.10,0.20" pour des ratages plus lointains).
+RECOVERY_OFFSET = tuple(float(v) for v in
+                        os.environ.get("ROBY_RECOVERY_OFFSET", "0.02,0.08").split(","))
+RECOVERY_LIFT = 0.05              # "se lever un peu" avant de se recaler (m au-dessus du beside)
+RECOVERY_EXTRA_DOWN = 0.01        # la pose "ratee" descend 1cm SOUS la hauteur de prise (pince au
+                                  # ras de la table, comme une vraie prise ratee ; demande Sam 2026-07-22)
 REC_SETTLE = 1.5                  # s : attente apres rec.start (le bag doit s'abonner AVANT
                                   # que le mouvement enregistre commence, sinon le debut manque)
 N_TRY_VALID = 80                  # + de tirages : grande zone + rejet (keep-out/atteignabilite)
@@ -113,12 +136,25 @@ def _table_dz(x, y):
     return float(min(hi, max(lo, dz)))
 
 
+# Hauteur de prise sur la zone CUISINE (2026-09-06).
+# Reprend la distance zone/surface de l'ancienne scene : le plan de travail de l'atelier
+# avait sa surface a z=-0.190 et la prise se faisait a z=+0.0721, soit 26.2 cm au-dessus.
+# La surface de la nouvelle zone etant a z=-0.007, la prise est a -0.007 + 0.262.
+Z_SURFACE_CUISINE = -0.007
+CLEARANCE_PRISE = 0.2621
+Z_PICK_CUISINE = Z_SURFACE_CUISINE + CLEARANCE_PRISE     # = +0.2551 m
+
+
 def _z_pick(x=None, y=None):
-    """Hauteur de prise. Sans (x,y) = z de D (retro-compat print/aerien).
-    Avec (x,y) = z de D + correction d'inclinaison de table au point vise."""
-    if x is None:
-        return D_XYZ[2]
-    return D_XYZ[2] + _table_dz(x, y)
+    """Hauteur de prise sur la zone cuisine.
+
+    La correction d'inclinaison (`_table_dz`) est DESACTIVEE : elle avait ete calibree
+    sur la table de l'atelier (plan incline radial, nul au rayon de D). Rien ne dit
+    qu'elle vaut pour le plan de travail de la cuisine, et l'appliquer telle quelle
+    ferait descendre le bras de plusieurs centimetres de trop pres du robot.
+    A re-sonder sur la nouvelle zone avant de la reactiver.
+    """
+    return Z_PICK_CUISINE
 
 
 def _z_lift(z_target):
@@ -268,16 +304,19 @@ class Motion:
             return
         self.pk.grip(close)
 
-    def pre_record_settle(self):
+    def pre_record_settle(self, close=False):
         """Debut de fenetre enregistree : (1) laisse le bag s'abonner (REC_SETTLE)
-        pour ne pas manquer le debut ; (2) RE-AFFIRME l'etat pince OUVERTE => la
-        consigne pince initiale est DANS le bag (topic evenementiel : sinon le 1er
-        /gripper du bag serait la fermeture a R, l'etat de depart serait perdu)."""
+        pour ne pas manquer le debut ; (2) RE-AFFIRME l'etat pince initial => la
+        consigne pince est DANS le bag (topic evenementiel : sinon le 1er /gripper du
+        bag serait le prochain changement, l'etat de depart serait perdu).
+        close=False (normal, pince ouverte prete a saisir) ; close=True (RATTRAPAGE :
+        pince FERMEE sur du vide = la prise vient d'echouer)."""
+        etat = "FERMEE" if close else "OUVERTE"
         if self.mode in ("dry", "plan"):
-            print("    [REC] settle + re-affirme pince OUVERTE")
+            print(f"    [REC] settle + re-affirme pince {etat}")
             return
         time.sleep(REC_SETTLE)
-        self.gripper(close=False)   # etat initial OUVERT, capture dans le bag
+        self.gripper(close=close)   # etat initial capture dans le bag
         time.sleep(0.3)
 
     # --- prise/depose : approche 5cm AVANT + descente droite + APRES remontee 5cm ---
@@ -307,6 +346,24 @@ def sample_table(motion, rng):
             continue
         xyz = (x, y, _z_pick(x, y))                            # z corrige de l'inclinaison
         if motion.reachable(xyz) and motion.descent_ok(xyz):   # R garanti sans abort
+            return xyz
+    return None
+
+
+def sample_beside(motion, R, rng):
+    """Scenario rattrapage : pose 'ratee' a cote de la pomme R, AU RAS de la table,
+    decalee horizontalement de RECOVERY_OFFSET dans une direction aleatoire. Meme
+    validation qu'un point de prise (zone + atteignabilite + descente/remontee), donc
+    le rattrapage ne peut pas avorter au demarrage. None si aucun essai ne passe."""
+    for _ in range(N_TRY_VALID):
+        ang = rng.uniform(-np.pi, np.pi)
+        mag = rng.uniform(*RECOVERY_OFFSET)
+        x = R[0] + mag * np.cos(ang)
+        y = R[1] + mag * np.sin(ang)
+        if not _zone_ok(x, y):
+            continue
+        xyz = (x, y, _z_pick(x, y) - RECOVERY_EXTRA_DOWN)      # 1cm SOUS la prise (pince au ras table)
+        if motion.reachable(xyz) and motion.descent_ok(xyz):
             return xyz
     return None
 
@@ -351,18 +408,25 @@ def _angles_pince_reels():
     return {"open_deg_stack": None, "closed_deg_stack": None,
             "source": "NON LU - ne pas se fier a ces valeurs"}
 
-def _episode_meta(i, seed, mode, R, vel, cart_speed):
+def _episode_meta(i, seed, mode, R, vel, cart_speed, recovery=False, beside=None):
     """Fiche d'infos d'un episode enregistre (ecrite a cote du bag : <ep>.meta.json)."""
     import datetime
     (xw, yw) = _window()
-    return {
+    meta = {
         "date": datetime.datetime.now().isoformat(timespec="seconds"),
         "batch_seed": seed,                 # identifie la serie (rejouable via --seed)
         "episode": i,
         "mode": mode,
+        "scenario": "recovery" if recovery else "normal",
         "objet_manipule": "pomme blanche imprimee en 3D",
-        "fenetre_enregistree": ("A_aerien -> prise de l'objet a R -> depose a D -> lache. "
-                                "Le PLACEMENT de l'objet a R (setup) n'est PAS enregistre."),
+        "fenetre_enregistree": (
+            ("RATTRAPAGE : depart A COTE de la pomme au ras de la table, pince FERMEE sur du vide "
+             "(la prise vient d'echouer) -> se releve un peu -> ROUVRE -> se recale au-dessus de R -> "
+             "prend -> depose a D -> lache. Le placement de l'objet a R ET la mise en position 'ratee' "
+             "(setup) ne sont PAS enregistres.")
+            if recovery else
+            ("A_aerien -> prise de l'objet a R -> depose a D -> lache. "
+             "Le PLACEMENT de l'objet a R (setup) n'est PAS enregistre.")),
         "pick_point_R": {"x": round(float(R[0]), 4), "y": round(float(R[1]), 4), "z": round(float(R[2]), 4)},
         "place_point_D": {"x": round(float(D_XYZ[0]), 4), "y": round(float(D_XYZ[1]), 4), "z": round(float(D_XYZ[2]), 4)},
         "generation_cible": {
@@ -380,6 +444,13 @@ def _episode_meta(i, seed, mode, R, vel, cart_speed):
                        **_angles_pince_reels()),
         "vitesses": {"libre_moveit": vel, "ligne_droite_m_s": cart_speed},
     }
+    if recovery and beside is not None:
+        meta["start_beside_rate"] = {"x": round(float(beside[0]), 4), "y": round(float(beside[1]), 4),
+                                     "z": round(float(beside[2]), 4),
+                                     "decalage_vs_R_m": round(float(np.hypot(beside[0] - R[0],
+                                                                             beside[1] - R[1])), 4)}
+        meta["recovery_params"] = {"offset_m": list(RECOVERY_OFFSET), "lift_m": RECOVERY_LIFT}
+    return meta
 
 
 def make_recorder(mode, out_dir, no_record=False):
@@ -405,7 +476,7 @@ def make_recorder(mode, out_dir, no_record=False):
     return Recorder(out_dir, topics=topics)
 
 
-def run(mode, n_episodes, out_dir, seed, vel, cart_speed, no_record=False):
+def run(mode, n_episodes, out_dir, seed, vel, cart_speed, no_record=False, recovery=False):
     # seed None => graine OS (vraiment aleatoire, differente a chaque run).
     # On l'imprime : si une serie est bonne, on la rejoue avec --seed <valeur>.
     if seed is None:
@@ -416,7 +487,8 @@ def run(mode, n_episodes, out_dir, seed, vel, cart_speed, no_record=False):
     # Sous-dossier de run (batch) : noms d'episodes uniques => plus de collision
     # ep_000 entre deux runs (ros2 bag record REFUSE un dossier deja existant).
     import datetime
-    batch_dir = os.path.join(out_dir, f"batch_{seed}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    _pref = "batch_recovery" if recovery else "batch"
+    batch_dir = os.path.join(out_dir, f"{_pref}_{seed}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
     rec = make_recorder(mode, batch_dir, no_record)
     if mode == "real":
         print("*** --no-record : le bras BOUGE mais AUCUN bag n'est enregistre (verif) ***"
@@ -439,15 +511,38 @@ def run(mode, n_episodes, out_dir, seed, vel, cart_speed, no_record=False):
             print("  !! pas de R atteignable, saut"); continue
         if not motion.place_at("R_aleatoire", R):
             print("  !! ECHEC pose R -> ARRET"); break
-        A = sample_aerien(motion, rng)
-        if A is None:
-            print("  !! pas de A atteignable, saut"); continue
-        if not motion.move_free("aerien_A", A):
-            print("  !! ECHEC aerien -> ARRET"); break
-        rec.start(f"ep_{i:03d}", _episode_meta(i, seed, mode, R, vel, cart_speed))
-        motion.pre_record_settle()   # bag pret + etat pince initial (OUVERT) dans le bag
-        ok = motion.pick_at("R_connu", R) and motion.place_at("cone_D", D_XYZ)
-        rec.stop()
+        if recovery:
+            # --- SCENARIO RATTRAPAGE ---
+            B = sample_beside(motion, R, rng)
+            if B is None:
+                print("  !! pas de pose 'ratee' atteignable, saut"); continue
+            B_above = (B[0], B[1], B[2] + RECOVERY_LIFT)      # 'se lever un peu' au-dessus du beside
+            # SETUP (NON enregistre) : aller au-dessus, COMMENCER A FERMER la pince, PUIS descendre
+            # sur du vide = la prise vient d'echouer (pince deja en fermeture en descendant, demande Sam).
+            if not motion.move_free("rate_approche", B_above):
+                print("  !! ECHEC approche pose ratee -> ARRET"); break
+            motion.gripper(close=True)                        # commence a fermer AVANT de descendre
+            if not motion.descend("rate_beside", B):
+                print("  !! ECHEC descente pose ratee -> ARRET"); break
+            rec.start(f"ep_{i:03d}", _episode_meta(i, seed, mode, R, vel, cart_speed,
+                                                   recovery=True, beside=B))
+            motion.pre_record_settle(close=True)   # etat initial DANS le bag : pince FERMEE (rate), a cote
+            # RATTRAPAGE enregistre : se lever -> ROUVRIR -> se recaler+ramasser -> amener a D -> lacher
+            ok = motion.descend("releve", B_above)         # se lever un peu (pince encore fermee)
+            if ok:
+                motion.gripper(close=False)                # ROUVRIR la pince (prete a re-saisir)
+                ok = motion.pick_at("R_connu", R) and motion.place_at("cone_D", D_XYZ)
+            rec.stop()
+        else:
+            A = sample_aerien(motion, rng)
+            if A is None:
+                print("  !! pas de A atteignable, saut"); continue
+            if not motion.move_free("aerien_A", A):
+                print("  !! ECHEC aerien -> ARRET"); break
+            rec.start(f"ep_{i:03d}", _episode_meta(i, seed, mode, R, vel, cart_speed))
+            motion.pre_record_settle()   # bag pret + etat pince initial (OUVERT) dans le bag
+            ok = motion.pick_at("R_connu", R) and motion.place_at("cone_D", D_XYZ)
+            rec.stop()
         if not ok:
             print("  !! ECHEC pendant enregistrement -> ARRET"); break
         print(f"  episode {i:03d} OK (objet revenu a D)\n")
@@ -466,12 +561,15 @@ def main():
     ap.add_argument("--vel", type=float, default=0.30, help="vitesse libre MoveIt (defaut 0.30)")
     ap.add_argument("--cart-speed", type=float, default=0.02, help="vitesse ligne droite m/s (defaut 0.02)")
     ap.add_argument("--no-record", action="store_true", help="bouge le bras SANS enregistrer (verif)")
+    ap.add_argument("--recovery", action="store_true",
+                    help="scenario RATTRAPAGE : depart A COTE de la pomme au ras de la table (rate), "
+                         "se releve, se recale, ramasse, depose. Batch dedie batch_recovery_*.")
     args = ap.parse_args()
     if args.mode == "real" and not args.go:
         print("REFUS : --mode real bouge le BRAS REEL. Relance avec --go (Sam present).")
         return
     run(args.mode, args.episodes, os.path.expanduser(args.out), args.seed, args.vel, args.cart_speed,
-        args.no_record)
+        args.no_record, recovery=args.recovery)
 
 
 if __name__ == "__main__":

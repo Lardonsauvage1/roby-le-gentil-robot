@@ -1,8 +1,14 @@
+# RECALAGE DU NID (2026-09-06) : la pose du nid a ete re-etiquetee
+#   joint_2 -0.0904 rad (-5.18 deg) | joint_3 +0.0597 (+3.42) | joint_5 -0.0242 (-1.39)
+# Seules les poses liees au NID sont recalees (nid, approche_nid, sortie et les
+# waypoints de sortie). changeur_outil, approche_changeur et D_pose_cone gardent
+# l'ANCIENNE convention : elles ont ete validees physiquement par demonstration.
+# ⚠️ DEUX CONVENTIONS COEXISTENT donc dans ce fichier — c'est un choix assume.
 # Bibliothèque de poses pour roby_moveit_seq.py  (nom: [j1,j2,j3,j4,j5] en radians)
 # Capture des poses avec l'outil de jog (bouton Capturer) -> elles s'ajoutent ici.
-nid: [1.5627, 1.0083, 0.3923, 0.0000, 0.2251]
+nid: [1.5627, 0.9179, 0.4520, 0.0000, 0.2009]
 changeur_outil: [-0.5098, 0.9257, 0.5103, 0.0000, 0.2251]
 D_pose_cone: [0.5649, 1.2491, -0.5935, -0.0557, 1.0070]   # tcp_world_m=[0.6790, 0.4220, -0.0280] (2026-07-11, prise top-down)
 approche_changeur: [-0.5098, 0.6772, 0.5720, -0.0000, 0.4118]
-approche_nid: [1.5627, 0.7748, 0.4651, 0.0000, 0.3858]
-sortie: [0.6920, 0.5238, 0.4447, 0.0000, 0.2251]   # fin trajectoire sortie du nid (ajout 2026-07-17)
+approche_nid: [1.5627, 0.6844, 0.5248, 0.0000, 0.3616]
+sortie: [0.6920, 0.4334, 0.5044, 0.0000, 0.2009]   # fin trajectoire sortie du nid (ajout 2026-07-17)
