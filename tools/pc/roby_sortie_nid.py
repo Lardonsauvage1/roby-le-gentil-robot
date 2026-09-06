@@ -18,12 +18,14 @@ import argparse
 import math
 import os
 import sys
+import time
 
 import yaml
 import rclpy
 from rclpy.action import ActionClient
 from builtin_interfaces.msg import Duration
 from control_msgs.action import FollowJointTrajectory
+from std_msgs.msg import Bool
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 JOINTS = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
@@ -33,6 +35,10 @@ SAFE_VEL = 0.15   # rad/s max par joint (lent / sur)
 # (sinon le rattrapage vers wps[0] depasse SAFE_VEL).
 LEAD_IN = float(os.environ.get("ROBY_LEAD_IN", 3.0))
 MIN_SEG = 0.8     # s minimum par segment
+# Le nid utilise le MEME connecteur qu'un outil : verrou engage = tete retenue par le
+# berceau. Tirer dessus verrouille force sur le changeur d'outil. On deverrouille donc
+# TOUJOURS avant de bouger, dans les DEUX sens (re-docker exige aussi le verrou ouvert).
+UNLOCK_SETTLE = float(os.environ.get("ROBY_UNLOCK_SETTLE", 1.5))  # s de course du servo
 
 
 def build(wps):
@@ -71,6 +77,8 @@ def main():
         ts = pt.time_from_start.sec + pt.time_from_start.nanosec / 1e9
         print(f"  t={ts:5.1f}s  " + " ".join(f"{deg(v):7.1f}" for v in pt.positions) + " deg")
 
+    print("  (avec --go : DEVERROUILLAGE de la tete d'abord, puis mouvement)")
+
     if not a.go:
         print("\n[DRY] rien envoye. Ajoute --go pour BOUGER (bras au nid + validation Sam).")
         return 0
@@ -81,6 +89,23 @@ def main():
     if not ac.wait_for_server(timeout_sec=5.0):
         print("❌ arm_controller absent (stack up ?)")
         return 1
+
+    # --- DEVERROUILLAGE OBLIGATOIRE, avant tout mouvement -------------------
+    # Fail-safe : sans abonne a /head_lock (= RobySystem), on ne PEUT PAS garantir que
+    # le verrou s'ouvre => on refuse de bouger plutot que de tirer sur le berceau.
+    lock_pub = node.create_publisher(Bool, "/head_lock", 10)
+    t0 = time.monotonic()
+    while lock_pub.get_subscription_count() < 1:
+        if time.monotonic() - t0 > 5.0:
+            print("❌ /head_lock sans abonne : deverrouillage NON garanti -> ON NE BOUGE PAS.")
+            print("   (RobySystem tourne-t-il ? la stack est-elle bien en archi B ?)")
+            return 1
+        rclpy.spin_once(node, timeout_sec=0.1)
+    lock_pub.publish(Bool(data=False))
+    print(f"verrou : DEVERROUILLE (/head_lock false), attente {UNLOCK_SETTLE:.1f}s de course servo...")
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < UNLOCK_SETTLE:
+        rclpy.spin_once(node, timeout_sec=0.05)
     goal = FollowJointTrajectory.Goal()
     goal.trajectory = traj
     fut = ac.send_goal_async(goal)
