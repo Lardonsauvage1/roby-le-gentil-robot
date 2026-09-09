@@ -134,10 +134,13 @@ joints:
     (3,6217 -> 1,8109 rad) pour doubler la vitesse a geste egal, meme methode que l''axe 1.
     La course mecanique reelle, elle, ne change pas. 2026-09-09 (Sam) : signe +1 -> -1, sens
     inverse constate en teleoperation simulee. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py),
-    correspondance -> 0.0 deg cote Roby. Signe -1 -> +1 (roby_leader_signe.py).'
+    correspondance -> 0.0 deg cote Roby. Signe -1 -> +1 (roby_leader_signe.py). zero_urdf
+    +0.0 -> +20.0 deg (decalage de +20 deg, roby_leader_offset.py). zero_urdf +20.0 -> -20.0
+    deg (decalage de -40 deg, roby_leader_offset.py). zero_urdf -20.0 -> +60.0 deg (decalage
+    de +80 deg, roby_leader_offset.py).'
   ecart_min: -0.572174
   ecart_max: 1.076855
-  zero_urdf: 0.0
+  zero_urdf: 1.0471975511965974
 - id: 6
   nom_leader: pince
   nom_urdf: gripper
