@@ -142,7 +142,12 @@ class LeaderNode(Node):
         self.declare_parameter("torque_limit", TORQUE_LIMIT_MAX)
         # --- mode joystick (rappel elastique vers le zero + consigne de vitesse) ---
         self.declare_parameter("calib_file", "")
-        self.declare_parameter("joystick_deadzone_deg", 5.0)
+        # Zone morte PAR AXE, meme convention que joystick_torque_max_pct :
+        # une seule valeur s'applique a tous, sinon autant de valeurs que d'axes.
+        # Les axes qui portent le bras (base, epaule, coude) demandent une zone
+        # plus large : la main y exerce des micro-efforts en permanence, et une
+        # zone trop etroite fait deriver le robot a l'arret.
+        self.declare_parameter("joystick_deadzone_deg", [5.0])
         # Couple max par AXE (aligne sur `ids`). Une seule valeur = la meme partout.
         # Les axes porteurs (epaule, coude) en demandent plus : ramener au neutre exige
         # de SOULEVER le bras, bien plus que de le maintenir.
@@ -247,7 +252,7 @@ class LeaderNode(Node):
 
         # ---- mode joystick ----
         self.joy_actif = False
-        self.joy_deadzone = math.radians(float(g("joystick_deadzone_deg").value))
+        self.joy_deadzone = self._deadzones(g("joystick_deadzone_deg").value)
         pcts = list(g("joystick_torque_max_pct").value)
         if len(pcts) == 1:
             pcts = pcts * len(self.ids)
@@ -430,6 +435,18 @@ class LeaderNode(Node):
                                        % ", ".join("%s %.0f%%" % (self.name_of[s2], v)
                                                    for s2, v in zip(self.ids, vals)))
                 continue
+            if p.name == "joystick_deadzone_deg":
+                # Reglable a CHAUD, comme le couple : on elargit la zone morte en
+                # observant la derive a l'arret, sans relancer le noeud.
+                try:
+                    self.joy_deadzone = self._deadzones(p.value)
+                except ValueError as e:
+                    return SetParametersResult(successful=False, reason=str(e))
+                self.get_logger().warn(
+                    "zone morte joystick -> [%s]"
+                    % ", ".join("%s %.1f deg" % (self.name_of[sid], math.degrees(z))
+                                for sid, z in self.joy_deadzone.items()))
+                continue
             if p.name == "joystick_torque_max_pct":
                 # Reglable a CHAUD : on monte le couple par paliers en observant le bras,
                 # sans relancer le noeud ni repasser par la sequence d'activation.
@@ -449,6 +466,18 @@ class LeaderNode(Node):
                 return SetParametersResult(successful=False,
                                            reason="ecriture refusee par un servo")
         return SetParametersResult(successful=True)
+
+    def _deadzones(self, valeurs):
+        """-> {sid: zone morte en radians}. Une valeur = tous les axes."""
+        v = [float(x) for x in list(valeurs)]
+        if len(v) == 1:
+            v = v * len(self.ids)
+        if len(v) != len(self.ids):
+            raise ValueError("joystick_deadzone_deg : %d valeurs pour %d axes"
+                             % (len(v), len(self.ids)))
+        if any(x < 0 or x > 90 for x in v):
+            raise ValueError("joystick_deadzone_deg : valeur hors de 0..90 deg")
+        return {sid: math.radians(x) for sid, x in zip(self.ids, v)}
 
     # ------------------------------------------------------------------ joystick
     def _srv_joystick(self, req, resp):
@@ -490,8 +519,11 @@ class LeaderNode(Node):
                                           100.0 * c / TORQUE_LIMIT_MAX)
                            for sid, c in self.joy_couple_max.items())
         return True, ("mode joystick ACTIF : rappel vers le zero par le plus court "
-                      "chemin, zone morte %.1f deg, couple max par axe [%s]"
-                      % (math.degrees(self.joy_deadzone), detail))
+                      "chemin, zone morte par axe [%s], couple max par axe [%s]"
+                      % (", ".join("%s %.1f deg" % (self.name_of[sid],
+                                                    math.degrees(z))
+                                   for sid, z in self.joy_deadzone.items()),
+                         detail))
 
     def _joystick_off(self):
         self.joy_actif = False
@@ -534,7 +566,7 @@ class LeaderNode(Node):
             sid = self._sid_de(j.nom_leader)
             if sid is None or sid not in pos:
                 continue
-            v, couple = commande_axe(j, steps_to_rad(pos[sid]), self.joy_deadzone,
+            v, couple = commande_axe(j, steps_to_rad(pos[sid]), self.joy_deadzone[sid],
                                      self.joy_couple_max[sid],
                                      self.joy_couple_min.get(sid, 0))
             msg.name.append(j.nom_urdf)
@@ -544,7 +576,7 @@ class LeaderNode(Node):
             # `joystick_pas_max`.
             cible = cible_de_rappel(
                 pos[sid], rad_to_steps(j.zero), self.joy_pas_max,
-                int(self.joy_deadzone * 4096 / (2 * math.pi)))
+                int(self.joy_deadzone[sid] * 4096 / (2 * math.pi)))
             cibles[sid] = cible
             # On n'ecrit le couple que s'il change : inutile de saturer le bus.
             if self._joy_dernier_couple.get(sid) != couple:
