@@ -15,7 +15,7 @@ joints:
   nom_leader: axe_1_base
   nom_urdf: joint_1
   signe: -1.0
-  zero: 3.057223710256083
+  zero: 2.8547382462551782
   echelle: 1.0
   urdf_min: -3.14159
   urdf_max: 3.14159
@@ -35,6 +35,7 @@ joints:
     -> 0.0 deg cote Roby. zero_urdf +0.0 -> -180.0 deg (decalage de +180 deg, roby_leader_offset.py).
     continu: false -> true : la base couvre un tour complet cote Roby, ses butees sont une
     couture et non un obstacle. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py),
+    correspondance -> -180.0 deg cote Roby. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py),
     correspondance -> -180.0 deg cote Roby.'
   ecart_min: -0.989418
   ecart_max: 1.071486
@@ -43,7 +44,7 @@ joints:
   nom_leader: axe_2_epaule
   nom_urdf: joint_2
   signe: 1.0
-  zero: 2.713612013769699
+  zero: 2.270291566070749
   echelle: 1.023534
   urdf_min: -1.6
   urdf_max: 2.1
@@ -60,7 +61,8 @@ joints:
     zero guide +156.6 -> +166.6 deg (decalage de +10 deg, roby_leader_offset.py --guide).
     zero guide +166.6 -> +176.6 deg (decalage de +10 deg, roby_leader_offset.py --guide).
     Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py), correspondance -> 0.0 deg
-    cote Roby.'
+    cote Roby. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py), correspondance
+    -> 0.0 deg cote Roby.'
   ecart_min: -1.352971
   ecart_max: 2.225806
   zero_urdf: 0.0
@@ -68,7 +70,7 @@ joints:
   nom_leader: axe_3_coude
   nom_urdf: joint_3
   signe: 1.0
-  zero: 2.2933012778890336
+  zero: 2.500388684253595
   echelle: 1.162129
   urdf_min: -3.0
   urdf_max: 0.65
@@ -86,7 +88,9 @@ joints:
     +156.3 -> +166.3 deg (decalage de +10 deg, roby_leader_offset.py --guide). zero guide
     +166.3 -> +146.3 deg (decalage de -20 deg, roby_leader_offset.py --guide). zero guide
     +146.3 -> +136.3 deg (decalage de -10 deg, roby_leader_offset.py --guide). Zero RELEVE
-    sur la pose reelle du guide (roby_leader_zero.py), correspondance -> 0.0 deg cote Roby.'
+    sur la pose reelle du guide (roby_leader_zero.py), correspondance -> 0.0 deg cote Roby.
+    Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py), correspondance -> 0.0 deg
+    cote Roby.'
   ecart_min: -2.224272
   ecart_max: 0.885107
   zero_urdf: 0.0
@@ -94,7 +98,7 @@ joints:
   nom_leader: axe_4_poignet
   nom_urdf: joint_4
   signe: -1.0
-  zero: 5.295301679781233
+  zero: 5.333651199478374
   echelle: 1.0
   urdf_min: -3.1416
   urdf_max: 3.1416
@@ -109,6 +113,7 @@ joints:
     joystick. Signe -1 -> +1 (roby_leader_signe.py). Signe +1 -> -1 (roby_leader_signe.py).
     Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py), correspondance -> 0.0 deg
     cote Roby. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py), correspondance
+    -> 0.0 deg cote Roby. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py), correspondance
     -> 0.0 deg cote Roby.'
   ecart_min: null
   ecart_max: null
@@ -117,7 +122,7 @@ joints:
   nom_leader: axe_5_rot_poignet
   nom_urdf: joint_5
   signe: 1.0
-  zero: 4.34269961050425
+  zero: 4.417864669110647
   echelle: 0.87472
   urdf_min: -1.6
   urdf_max: 1.6
@@ -143,6 +148,7 @@ joints:
     +0.0 -> +20.0 deg (decalage de +20 deg, roby_leader_offset.py). zero_urdf +20.0 -> -20.0
     deg (decalage de -40 deg, roby_leader_offset.py). zero_urdf -20.0 -> +60.0 deg (decalage
     de +80 deg, roby_leader_offset.py). Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py),
+    correspondance -> 60.0 deg cote Roby. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py),
     correspondance -> 60.0 deg cote Roby.'
   ecart_min: -0.572174
   ecart_max: 1.076855

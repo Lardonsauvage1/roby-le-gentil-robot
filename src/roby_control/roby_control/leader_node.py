@@ -347,6 +347,7 @@ class LeaderNode(Node):
         self._joy_prev = None
         self._joy_dernier_couple = {}
         chemin = g("calib_file").value or None
+        self._calib_chemin = chemin
         try:
             self.cal = charger_calib(chemin)
             manquants = self.cal.non_calibres()
@@ -370,6 +371,8 @@ class LeaderNode(Node):
             1.0 / max(1.0, float(g("joystick_rate_hz").value)), self._tick_joystick)
         self.create_timer(
             1.0 / max(1.0, float(g("maintien_rate_hz").value)), self._tick_maintien)
+        self._mtime_calib_vu = self._mtime_calib()
+        self.create_timer(0.5, self._recharger_si_change)
 
         self._fails = 0
         self._stale = False
@@ -554,6 +557,42 @@ class LeaderNode(Node):
         if any(x < 0 or x > 90 for x in v):
             raise ValueError("joystick_deadzone_deg : valeur hors de 0..90 deg")
         return {sid: math.radians(x) for sid, x in zip(self.ids, v)}
+
+    # -------------------------------------------------------------- calibration
+    def _fichier_calib(self):
+        if self._calib_chemin:
+            return os.path.expanduser(self._calib_chemin)
+        from ament_index_python.packages import get_package_share_directory
+        return os.path.join(get_package_share_directory("roby_control"),
+                            "config", "leader_calibration.yaml")
+
+    def _mtime_calib(self):
+        try:
+            return os.path.getmtime(self._fichier_calib())
+        except OSError:
+            return None
+
+    def _recharger_si_change(self):
+        """Relit la calibration a chaud, comme les noeuds de teleoperation.
+
+        Sans cela, le RECENTRAGE visait les zeros charges au demarrage du noeud : on
+        deplacait la pose de repos du guide, on relancait le recentrage, et il revenait
+        a l'ANCIENNE pose sans qu'aucun message ne le signale. Vecu le 2026-09-10.
+        Le mode joystick est concerne de la meme facon, son rappel visant ces zeros.
+        """
+        m = self._mtime_calib()
+        if m is None or m == self._mtime_calib_vu:
+            return
+        try:
+            cal = charger_calib(self._calib_chemin)
+        except Exception as e:
+            self.get_logger().warn("calibration illisible, on garde l'ancienne : %s" % e)
+            return
+        self.cal, self._mtime_calib_vu = cal, m
+        self.get_logger().warn(
+            "calibration RECHARGEE : %s"
+            % ", ".join("%s zero %.1f deg" % (j.nom_leader, math.degrees(j.zero))
+                        for j in self.cal.joints))
 
     # ---------------------------------------------------------------- maintien
     def _srv_maintien(self, req, resp):
