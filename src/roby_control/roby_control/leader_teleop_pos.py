@@ -55,6 +55,7 @@ class TeleopPos(Node):
         self.q = {}
         self.dernier = None
         self._clamps = set()
+        self._publie = {}
         self._n_clamp = 0
 
         # Rechargement A CHAUD de la calibration : regler un signe ou une echelle ne
@@ -82,8 +83,19 @@ class TeleopPos(Node):
                 self._clamps.add(j.nom_urdf)
                 self._n_clamp += 1
             prec = self.q.get(j.nom_urdf)
-            self.q[j.nom_urdf] = (cible if prec is None
-                                  else prec + (1 - self.alpha) * (cible - prec))
+            if prec is None:
+                self.q[j.nom_urdf] = cible
+                continue
+            # Le lissage doit suivre le PLUS COURT CHEMIN ANGULAIRE sur les axes qui
+            # font le tour. Sinon, quand la pose de repos tombe sur la couture (base a
+            # -180 deg), le bruit d'un seul pas de codeur fait alterner la consigne
+            # entre -180 et +180 : mathematiquement la meme pose, mais le lissage
+            # interpole ENTRE LES DEUX NOMBRES et fait balayer un demi-tour au bras.
+            # Mesure du 2026-09-09 : 226 sauts de 322 a 345 deg en 15 s, guide immobile.
+            ecart = cible - prec
+            if j.fait_le_tour():
+                ecart = (ecart + math.pi) % (2.0 * math.pi) - math.pi
+            self.q[j.nom_urdf] = prec + (1 - self.alpha) * ecart
         self.dernier = self.get_clock().now()
 
     def _tick(self):
@@ -97,7 +109,20 @@ class TeleopPos(Node):
                 return
         m = JointState()
         m.header.stamp = self.get_clock().now().to_msg()
+        tour = {j.nom_urdf for j in self.cal.joints if j.fait_le_tour()}
         for nom, v in self.q.items():
+            if nom in tour:
+                # Flux CONTINU : on publie la representation la plus proche de la
+                # precedente, au lieu de replier dans une fenetre fixe. Quand le repos
+                # tombe sur la couture, replier fait alterner -180 et +180 -- la meme
+                # pose, donc invisible dans RViz, mais un vrai demi-tour pour un
+                # controleur de trajectoire. Mesure : 16 alternances en 12 s.
+                p = self._publie.get(nom)
+                if p is not None:
+                    v = p + (v - p + math.pi) % (2.0 * math.pi) - math.pi
+                if abs(v) > 4.0 * math.pi:        # derive d'un operateur qui tourne
+                    v = (v + math.pi) % (2.0 * math.pi) - math.pi
+                self._publie[nom] = v
             m.name.append(nom)
             m.position.append(float(v))
         self.pub.publish(m)
