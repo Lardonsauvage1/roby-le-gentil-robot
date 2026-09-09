@@ -105,8 +105,12 @@ def main():
         if a.roby == "travail":
             # DECALAGE, pas remplacement : on ajoute la pose de travail a la
             # correspondance existante, ce qui preserve les corrections deja reglees.
-            d = POSE_TRAVAIL.get(j["nom_urdf"], 0.0)
-            cible = (j["zero_urdf"] + d + math.pi) % (2 * math.pi) - math.pi
+            # NE PAS nommer cette variable `d` : elle ecraserait le document YAML
+            # charge sous le meme nom, et `safe_dump` ecrirait ce flottant A LA PLACE
+            # DE TOUT LE FICHIER. C'est exactement ce qui s'est produit le 2026-09-09 :
+            # calibration reduite a une ligne "0.0", noeud muet, et commit du degat.
+            decalage = POSE_TRAVAIL.get(j["nom_urdf"], 0.0)
+            cible = (j["zero_urdf"] + decalage + math.pi) % (2 * math.pi) - math.pi
         elif a.roby == "zero":
             cible = 0.0
         else:
@@ -133,6 +137,12 @@ def main():
     if a.montrer:
         print("\n  (--montrer : rien n'a ete ecrit)")
         return 0
+    # GARDE-FOU : on ne remplace un fichier de calibration que si ce qu'on s'apprete a
+    # ecrire a bien la forme attendue. Une erreur de programmation en amont ne doit pas
+    # pouvoir detruire une calibration mesuree.
+    if not isinstance(d, dict) or not isinstance(d.get("joints"), list) or not d["joints"]:
+        print("ERREUR INTERNE : document invalide, RIEN n'a ete ecrit")
+        return 1
     tmp = CHEMIN + ".tmp"
     with open(tmp, "w") as f:
         yaml.safe_dump(d, f, allow_unicode=True, sort_keys=False, width=88)
