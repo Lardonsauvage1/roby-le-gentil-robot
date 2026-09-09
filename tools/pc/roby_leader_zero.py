@@ -19,7 +19,14 @@ l'echelle gere le reste de la course.
   roby_leader_zero.py                  # Roby au ZERO de ses articulations (defaut)
   roby_leader_zero.py --roby centre    # Roby au CENTRE de sa course
   roby_leader_zero.py --roby travail   # Roby dans sa POSE DE TRAVAIL (recommande)
+  roby_leader_zero.py --zero-seulement # NOUVELLE pose de repos, correspondance INCHANGEE
   roby_leader_zero.py --montrer        # ne rien ecrire, juste montrer
+
+`--zero-seulement` sert a deplacer la pose ou le guide se GARE au recentrage -- par
+exemple plus haut, pour avoir de la course vers le bas -- sans rien changer a ce que
+cette pose signifie pour Roby. On tient le guide dans la pose voulue, on lance, c'est
+tout. La correspondance (`zero_urdf`) est preservee, donc le robot ne bouge pas et les
+sens ne changent pas.
 
 `travail` DECALE les correspondances existantes de la pose de travail, au lieu de les
 remplacer : les corrections deja reglees sont donc conservees -- notamment les -180 deg
@@ -86,6 +93,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--roby", choices=["zero", "centre", "travail"], default="zero",
                     help="pose de Roby qui doit correspondre a la pose actuelle du guide")
+    ap.add_argument("--zero-seulement", action="store_true", dest="zero_seulement",
+                    help="capturer la pose de repos du guide sans toucher a la "
+                         "correspondance cote Roby")
     ap.add_argument("--montrer", action="store_true",
                     help="afficher sans ecrire")
     a = ap.parse_args()
@@ -102,7 +112,11 @@ def main():
         nom = j["nom_leader"]
         if nom not in pos:
             continue
-        if a.roby == "travail":
+        if a.zero_seulement:
+            # On ne touche QU'AU zero du guide : la correspondance reste celle qui a
+            # ete reglee, donc aucun sens ne bascule et le robot ne saute pas.
+            cible = j["zero_urdf"]
+        elif a.roby == "travail":
             # DECALAGE, pas remplacement : on ajoute la pose de travail a la
             # correspondance existante, ce qui preserve les corrections deja reglees.
             # NE PAS nommer cette variable `d` : elle ecraserait le document YAML
@@ -116,7 +130,7 @@ def main():
         else:
             cible = (j["urdf_min"] + j["urdf_max"]) / 2.0
         cible = max(j["urdf_min"], min(j["urdf_max"], cible))
-        garde = (a.roby == "travail")
+        garde = (a.roby == "travail" and not a.zero_seulement)
         print("  %-18s %6.1f -> %6.1f deg        %+6.1f deg%s"
               % (nom, math.degrees(j["zero"]),
                  math.degrees(j["zero"] if garde else pos[nom]),
@@ -126,7 +140,7 @@ def main():
             # juste, et le recapturer sur la position du moment le decalerait de
             # l'ecart residuel (5 deg constates). Seule change la pose de Roby qui
             # lui correspond.
-            if a.roby != "travail":
+            if a.roby != "travail" or a.zero_seulement:
                 j["zero"] = float(pos[nom])
             j["zero_urdf"] = float(cible)
             j["notes"] = (j.get("notes", "") or "") + (
