@@ -87,14 +87,20 @@ class TeleopCart(Node):
         # Chacun retire une inconnue au solveur ET une demande : un axe recopie devient
         # previsible (un degre de guide = k degres de robot, toujours), et l'IK n'a plus
         # a arbitrer pour lui. Avec [1, 5] il reste 3 axes pour 3 positions.
-        self.declare_parameter("axes_directs", [1, 5])
+        # [1] seulement : figer aussi joint_5 creait une quasi-singularite permanente
+        # (il ne restait que 2 et 3, tous deux autour du meme Y, plus 4 qui est un
+        # roulis et ne deplace presque pas le TCP) -- d'ou le manque d'autorite
+        # verticale. Valide avec Sam le 2026-09-09.
+        self.declare_parameter("axes_directs", [1])
         # POINT DE COMMANDE, en metres le long de l'axe de l'outil depuis link_gripper.
         # fkT() s'arrete a link_gripper ; le bout de pince (frame `tcp`) est 10 cm plus
         # loin. Sans cet offset, l'operateur place la croix sur un objet alors que le
         # point reellement commande est 10 cm en arriere -- decalage constant constate
         # le 2026-09-09. Mettre 0.0 pour revenir au point de commande historique du
         # projet (link_gripper), celui qu'utilisent l'oracle et roby_tool_pickup.
-        self.declare_parameter("offset_tcp_m", 0.10)
+        # 0,05 = milieu de la boite de la pince, le repere le plus naturel pour
+        # attraper quelque chose. Reglage retenu le 2026-09-09.
+        self.declare_parameter("offset_tcp_m", 0.05)
         # LAISSE : distance maximale entre la cible demandee et le TCP reellement
         # atteint. Sans elle, un bras bloque (butee, singularite) laisse la commande
         # INTEGRER indefiniment le geste : constate le 2026-09-09, joint_3 en butee et

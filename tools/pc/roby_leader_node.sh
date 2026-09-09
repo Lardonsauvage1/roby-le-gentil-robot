@@ -19,7 +19,15 @@ set -e
 VENV="$HOME/lerobot-experiments/venv/bin/python"
 [ -x "$VENV" ] || { echo "venv lerobot introuvable : $VENV"; exit 1; }
 
-ROS_ARGS=()
+# Reglages valides avec Sam le 2026-09-09 (teleoperation en position/cartesien).
+# Surchargeables : tout -p passe en ligne de commande arrive APRES et gagne.
+ROS_ARGS=(-p "ids:=[1,2,3,4,5]"
+          -p "joystick_deadzone_deg:=[10.0,10.0,10.0,5.0,5.0]"
+          -p "maintien_couple_pct:=35.0"
+          -p "maintien_relache_deg:=0.35"
+          -p "maintien_rate_hz:=25.0"
+          -p "recentrage_couple_pct:=45.0"
+          -p "recentrage_maintien_pct:=45.0")
 while [ $# -gt 0 ]; do
   case "$1" in
     --sim|--simulate) ROS_ARGS+=(-p simulate:=true); shift ;;
