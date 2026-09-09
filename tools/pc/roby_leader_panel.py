@@ -31,6 +31,7 @@ class Panneau(Node):
         self.cli_joystick = self.create_client(SetBool, "/leader/joystick")
         self.cli_embrayage = self.create_client(SetBool, "/teleop_cart/embrayage")
         self.cli_maintien = self.create_client(SetBool, "/leader/maintien")
+        self.cli_pose = self.create_client(Trigger, "/teleop_cart/pose_travail")
         self.cli_param = self.create_client(
             SetParameters, "/leader_teleop_cart/set_parameters")
         self.etat_cart = None
@@ -57,7 +58,7 @@ def main():
 
     root = tk.Tk()
     root.title("Bras guide")
-    root.geometry("440x540")
+    root.geometry("440x580")
     root.minsize(440, 480)
     # Redimensionnement VERTICAL autorise : la largeur est figee pour que les boutons
     # gardent leur place, mais brider la hauteur avait fini par couper les boutons du
@@ -158,6 +159,10 @@ def main():
                    command=lambda kk=k: appeler(n.cli_param, n.requete_echelle(kk),
                                                 "echelle")
                    ).pack(side="left", expand=True, fill="x", padx=2)
+
+    ttk.Button(cadre, text="placer le bras en POSE DE TRAVAIL",
+               command=lambda: appeler(n.cli_pose, Trigger.Request(),
+                                       "placement")).pack(fill="x", pady=(8, 0))
 
     ligne_e = ttk.Frame(cadre)
     ligne_e.pack(fill="x", pady=(10, 0))

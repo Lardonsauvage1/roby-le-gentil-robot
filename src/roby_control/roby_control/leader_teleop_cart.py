@@ -35,7 +35,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, Float64MultiArray
 from visualization_msgs.msg import Marker, MarkerArray
-from std_srvs.srv import SetBool
+from std_srvs.srv import SetBool, Trigger
 
 from roby_control.leader_mapping import charger
 
@@ -43,6 +43,9 @@ sys.path.insert(0, os.path.expanduser("~/ros2_ws/tools/pc"))
 from roby_tool_pickup import LIMITS, Rz, dls, fkT, jac, rotvec   # noqa: E402
 
 J = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
+
+# Pose de travail du reseau BC, mesuree sur le vrai robot (TCP a z = 0,33 m).
+POSE_TRAVAIL = [-0.2991, 0.8560, -0.4835, -0.0492, 1.3045]
 
 
 class TeleopCart(Node):
@@ -161,6 +164,7 @@ class TeleopCart(Node):
             Bool, "/leader/recentrage", self._cb_recentrage,
             QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL))
         self.create_service(SetBool, "/teleop_cart/embrayage", self._srv_embrayage)
+        self.create_service(Trigger, "/teleop_cart/pose_travail", self._srv_pose_travail)
         self.add_on_set_parameters_callback(self._sur_parametres)
 
         hz = float(self.get_parameter("publish_rate_hz").value)
@@ -261,6 +265,33 @@ class TeleopCart(Node):
             resp.message = "DEBRAYE : le robot est fige, le guide est libre"
         resp.success = True
         self.get_logger().warn("/teleop_cart/embrayage -> %s" % resp.message)
+        return resp
+
+    def _srv_pose_travail(self, req, resp):
+        """Place le bras SIMULE dans la pose de travail.
+
+        Necessaire parce que la commande cartesienne est INCREMENTALE : elle ne compare
+        que des ecarts depuis l'ancre, donc changer la correspondance neutre ne deplace
+        pas le bras d'un millimetre. Il reste la ou il etait -- y compris dans une
+        region mal conditionnee dont on ne sort plus, puisque la laisse borne la cible
+        a quelques centimetres.
+
+        Pose choisie : celle d'ou part le reseau BC, mesuree sur le vrai robot. TCP a
+        z = 0,33 m au-dessus de la zone du dataset, sigma_min = 0,18.
+        """
+        if self.embraye:
+            resp.success = False
+            resp.message = "debrayez d'abord : deplacer le bras embraye ferait un saut"
+            return resp
+        self.q = np.array(POSE_TRAVAIL, float)
+        self._publie = {}
+        self.cible_brute = None
+        self.cible_monde = None
+        p = self._p_outil(self.q)
+        resp.success = True
+        resp.message = ("bras place en pose de travail, TCP a z = %.3f m "
+                        "(embrayez pour reprendre)" % p[2])
+        self.get_logger().warn("/teleop_cart/pose_travail -> %s" % resp.message)
         return resp
 
     def _ancrer(self):
@@ -382,12 +413,23 @@ class TeleopCart(Node):
             ec = cible - actuel
             n_ec = float(np.linalg.norm(ec))
             if self.laisse > 0 and n_ec > self.laisse:
-                exces = ec * (1.0 - self.laisse / n_ec)
+                # L'ancre est REPOSITIONNEE, pas incrementee. Lui AJOUTER l'exces etait
+                # faux : au tick suivant l'exces se recalcule depuis la nouvelle ancre
+                # et s'ajoute encore, si bien que la cible reste eternellement une
+                # laisse devant la pince -- meme main immobile. Le bras poursuivait
+                # alors une carotte qui recule, jusqu'a la butee. Signale par Sam le
+                # 2026-09-09 : "il continue d'y aller jusqu'a plus pouvoir".
+                #
+                # On impose donc directement : cible = actuel + laisse * direction,
+                # d'ou l'ancre se deduit. Main immobile => cible fixe => le bras la
+                # rejoint et s'arrete.
+                voulu = actuel + ec * (self.laisse / n_ec)
+                delta = self.k * (p_guide - self.ancre_guide)
                 if self.base_directe and 0 in self.directs:
-                    self.ancre_p = self.ancre_p + Rz(-depart[0]) @ exces
+                    self.ancre_p = Rz(-depart[0]) @ voulu - delta
                 else:
-                    self.ancre_p = self.ancre_p + exces
-                cible = actuel + ec * (self.laisse / n_ec)
+                    self.ancre_p = voulu - delta
+                cible = voulu
 
             # Limitation de vitesse cartesienne : une main peut bouger bien plus vite
             # que ce que le bras encaisse, et l'echelle > 1 amplifie encore.
