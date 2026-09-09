@@ -65,6 +65,15 @@ class TeleopCart(Node):
         # L'amortissement `lam` du DLS masque les singularites en ralentissant en
         # silence : sans ce signal, l'operateur croit que le robot n'obeit plus.
         self.declare_parameter("seuil_singularite", 0.02)
+        # AMORTISSEMENT ADAPTATIF. Un lambda fixe est un compromis unique applique
+        # partout : assez fort pour survivre pres d'une singularite, donc bien trop
+        # fort loin d'elle, ou il n'y a rien a amortir. Le bras traine alors en
+        # permanence pour se proteger d'un danger presque toujours absent.
+        # Ici lambda vaut ZERO tant que la plus petite valeur singuliere est
+        # confortable, et ne monte que lorsqu'elle s'effondre.
+        self.declare_parameter("lam_max", 0.10)
+        self.declare_parameter("lam_seuil", 0.08)
+        self.declare_parameter("ik_tolerance_m", 1e-4)
         # BASE HORS CINEMATIQUE (idee de Sam, 2026-09-09) : joint_1 n'est plus resolu
         # par l'IK, sa valeur est recopiee de celle du guide avec le meme rapport de
         # mouvement. Deux gains : la base devient previsible (un degre de guide donne
@@ -391,8 +400,9 @@ class TeleopCart(Node):
             # dls() vise link_gripper : on retire l'offset de l'outil, exprime dans
             # l'orientation demandee. Le point de commande reste le bout de pince.
             cible_lg = cible - R_guide @ np.array([self.off, 0.0, 0.0])
-            q = (self._dls_base_figee(depart, cible_lg, R_guide) if self.base_directe
-                 else dls(depart, cible_lg, R_guide, w_ori=self.w_ori))
+            # Meme solveur dans les deux cas : `directs` vide rend simplement tous
+            # les axes actifs. On ne garde pas deux chemins de code qui divergeraient.
+            q = self._dls_base_figee(depart, cible_lg, R_guide)
             for i, nom in enumerate(J):
                 lo, hi = LIMITS[nom]
                 if hi - lo >= 2.0 * math.pi - 1e-3:
@@ -444,31 +454,60 @@ class TeleopCart(Node):
             self._surveiller_singularite()
         self._publier()
 
-    def _dls_base_figee(self, j, target_p, target_R, lam=0.06, iters=8):
-        """DLS a axes FIGES : meme algorithme, colonnes des axes recopies annulees.
+    def _actifs(self):
+        """Indices des axes que le solveur a le droit de bouger."""
+        return [i for i in range(len(J)) if i not in self.directs]
 
-        Annuler la colonne suffit : dq = J^T (J J^T + lam^2 I)^-1 e, donc une colonne
-        nulle donne un dq nul sur cet axe. Inutile de reecrire un solveur reduit pour
-        chaque combinaison d'axes figes.
+    def _dls_base_figee(self, j, target_p, target_R, iters=8):
+        """IK differentielle amortie, amortissement ADAPTATIF, axes figes exclus.
+
+        Trois differences avec la version d'origine :
+
+        1. On resout dans le SOUS-ESPACE ACTIF. Annuler des colonnes laissait une
+           matrice de rang deficient dont la plus petite valeur singuliere valait
+           toujours zero -- tout critere de conditionnement calcule dessus etait donc
+           faux, et l'amortissement adaptatif aurait ete au maximum en permanence.
+        2. lambda ADAPTATIF : nul quand le bras est bien conditionne, il ne monte
+           qu'a l'approche d'une singularite. C'est ce qui enleve la mollesse
+           permanente sans rien perdre en stabilite la ou ca compte.
+        3. Forme NORMALE (Ja^T Ja + lam^2 I) de taille n x n, et non J J^T de taille
+           6 x 6 : avec moins de 6 axes actifs, J J^T est singuliere par construction
+           et n'est inversible que GRACE a l'amortissement -- ce qui obligeait a en
+           mettre meme sans singularite.
         """
         j = np.array(j, float)
+        act = self._actifs()
+        if not act:
+            return j
+        lam_max = float(self.get_parameter("lam_max").value)
+        seuil = max(1e-6, float(self.get_parameter("lam_seuil").value))
+        tol = float(self.get_parameter("ik_tolerance_m").value)
+        I = np.eye(len(act))
         for _ in range(iters):
             T = fkT(j)
-            e = np.concatenate([target_p - T[:3, 3],
-                                self.w_ori * (T[:3, :3] @ rotvec(T[:3, :3].T @ target_R))])
-            Jm = jac(j)
-            for i in self.directs:
-                Jm[:, i] = 0.0
-            dq = Jm.T @ np.linalg.inv(Jm @ Jm.T + lam ** 2 * np.eye(6)) @ e
-            # Pas borne : sans cela, une cible hors d'atteinte fait diverger le solveur
-            # en quelques iterations, la FK deborde et self.q part en NaN -- le noeud
-            # meurt alors sur "SVD did not converge", loin de la vraie cause.
+            e_p = target_p - T[:3, 3]
+            e_o = self.w_ori * (T[:3, :3] @ rotvec(T[:3, :3].T @ target_R))
+            if float(np.linalg.norm(e_p)) < tol and float(np.linalg.norm(e_o)) < tol:
+                break                      # deja au but : ne pas iterer pour rien
+            e = np.concatenate([e_p, e_o])
+            Ja = jac(j)[:, act]
+            try:
+                smin = float(np.linalg.svd(Ja, compute_uv=False)[-1])
+            except np.linalg.LinAlgError:
+                smin = 0.0
+            lam2 = 0.0 if smin >= seuil else lam_max ** 2 * (1.0 - (smin / seuil) ** 2)
+            try:
+                dqa = np.linalg.solve(Ja.T @ Ja + (lam2 + 1e-12) * I, Ja.T @ e)
+            except np.linalg.LinAlgError:
+                break
+            dq = np.zeros(len(J))
+            dq[act] = dqa
             n = float(np.linalg.norm(dq))
+            if not np.isfinite(n):
+                break
             if n > 0.5:
-                dq = dq * (0.5 / n)
-            j = j + dq
-            # Bornes appliquees A CHAQUE iteration, pas seulement a la fin : le solveur
-            # ne doit pas explorer des poses impossibles pour y calculer sa jacobienne.
+                dq = dq * (0.5 / n)        # pas borne : une cible hors d'atteinte
+            j = j + dq                     # faisait diverger le solveur en 8 pas
             for i, nom in enumerate(J):
                 lo, hi = LIMITS[nom]
                 if hi - lo < 2.0 * math.pi - 1e-3:
@@ -476,8 +515,14 @@ class TeleopCart(Node):
         return j
 
     def _surveiller_singularite(self):
+        act = self._actifs()
+        if not act:
+            return
         try:
-            s = np.linalg.svd(jac(self.q), compute_uv=False)
+            # Sur les colonnes ACTIVES : mesurer la jacobienne complete quand des axes
+            # sont figes donne un conditionnement qui ne correspond a rien de ce que
+            # le solveur peut reellement faire.
+            s = np.linalg.svd(jac(self.q)[:, act], compute_uv=False)
         except np.linalg.LinAlgError:
             return          # diagnostic seulement : jamais une cause d'arret
         proche = bool(s[-1] < self.seuil_sing)
@@ -503,7 +548,9 @@ class TeleopCart(Node):
             err = float(np.linalg.norm(rotvec(T[:3, :3].T @ self.guide[1])))
             e = Float64MultiArray()
             try:
-                sig = float(np.linalg.svd(jac(self.q), compute_uv=False)[-1])
+                act = self._actifs()
+                sig = float(np.linalg.svd(jac(self.q)[:, act],
+                                          compute_uv=False)[-1]) if act else 0.0
             except np.linalg.LinAlgError:
                 sig = float("nan")
             e.data = [float(self.k), 1.0 if self.embraye else 0.0,
