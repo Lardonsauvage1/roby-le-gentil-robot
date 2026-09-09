@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import functools
 import math
+import time
 import os
 import subprocess
 import xml.etree.ElementTree as ET
@@ -29,9 +30,10 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from std_srvs.srv import SetBool
+from std_srvs.srv import SetBool, Trigger
 
-from roby_control.leader_joystick import cible_de_rappel, commande_axe
+from roby_control.leader_joystick import (RESOLUTION, cible_de_rappel, commande_axe,
+                                          pas_court)
 from roby_control.leader_mapping import charger as charger_calib
 from roby_control.leader_bus import (
     LeaderBus,
@@ -167,6 +169,19 @@ class LeaderNode(Node):
         self.declare_parameter("joystick_rate_hz", 20.0)
         # Garde anti-emballement : au-dela de cette vitesse mesuree, on coupe tout.
         self.declare_parameter("joystick_vitesse_max_dps", 300.0)
+        # --- recentrage motorise (US-022) : le guide rejoint sa pose de reference ---
+        # Couple volontairement bas : le bras doit pouvoir etre retenu a la main sans
+        # effort. Ce n'est pas un actionneur de puissance, c'est une aide au placement.
+        self.declare_parameter("recentrage_couple_pct", 25.0)
+        self.declare_parameter("recentrage_pas_par_cycle", 60)
+        self.declare_parameter("recentrage_tolerance_deg", 2.0)
+        self.declare_parameter("recentrage_timeout_s", 12.0)
+        # Couple CONSERVE apres le recentrage, pour que le guide tienne sa pose au lieu
+        # de s'affaisser des qu'on le lache. 0 = on recoupe (bras libre a la main).
+        # Ce n'est pas la meme grandeur que `recentrage_couple_pct` : bouger le bras
+        # demande de vaincre les frottements, le maintenir demande seulement de porter
+        # son poids -- en general moins.
+        self.declare_parameter("recentrage_maintien_pct", 0.0)
 
         g = self.get_parameter
         self.ids = list(g("ids").value)
@@ -233,6 +248,8 @@ class LeaderNode(Node):
         self.pub_js = self.create_publisher(JointState, "/leader/joint_states", 10)
         self.pub_tel = self.create_publisher(DiagnosticArray, "/leader/telemetry", 5)
 
+        self.srv_recentrer = self.create_service(
+            Trigger, "/leader/recentrer", self._srv_recentrer)
         self.srv_torque = self.create_service(
             SetBool, "/leader/set_torque", self._srv_set_torque_all
         )
@@ -478,6 +495,94 @@ class LeaderNode(Node):
         if any(x < 0 or x > 90 for x in v):
             raise ValueError("joystick_deadzone_deg : valeur hors de 0..90 deg")
         return {sid: math.radians(x) for sid, x in zip(self.ids, v)}
+
+    # --------------------------------------------------------------- recentrage
+    def _srv_recentrer(self, req, resp):
+        """Ramene le guide a sa pose de reference (les `zero` de la calibration).
+
+        Pourquoi motorise plutot qu'a la main : replacer six axes au milieu de leur
+        course a l'oeil est long et imprecis, et en teleoperation en POSITION une pose
+        de depart fausse decale tout le suivi. Le bouton rend le point de depart
+        reproductible.
+
+        Deroulement : couple bas, on avance par petits pas vers le zero PAR LE PLUS
+        COURT CHEMIN (le servo interpole en numero de pas, il ferait sinon presque un
+        tour complet), puis on RECOUPE le couple -- l'etat de repos du guide reste
+        "libre a la main", jamais "tenu par les moteurs".
+        """
+        if self.joy_actif:
+            resp.success = False
+            resp.message = ("mode joystick actif : le coupez d'abord "
+                            "(/leader/joystick false), sinon les deux se battent")
+            return resp
+        g = self.get_parameter
+        couple = int(TORQUE_LIMIT_MAX * float(g("recentrage_couple_pct").value) / 100.0)
+        pas_cycle = int(g("recentrage_pas_par_cycle").value)
+        tol = int(math.radians(float(g("recentrage_tolerance_deg").value))
+                  * RESOLUTION / (2 * math.pi))
+        timeout = float(g("recentrage_timeout_s").value)
+        zeros = {}
+        for j in self.cal.joints:
+            sid = self._sid_de(j.nom_leader)
+            if sid is not None and sid in self.ids:
+                zeros[sid] = rad_to_steps(j.zero)
+        if not zeros:
+            resp.success = False
+            resp.message = "aucun axe calibre a recentrer"
+            return resp
+
+        self.bus.set_torque_limit(couple)
+        self.bus.set_torque(True)
+        t0 = time.monotonic()
+        restants = dict(zeros)
+        try:
+            while time.monotonic() - t0 < timeout:
+                pos = self.bus.read_positions()
+                restants = {sid: z for sid, z in zeros.items()
+                            if abs(pas_court(pos[sid], z)) > tol}
+                if not restants:
+                    break
+                self.bus.set_goal_position({
+                    sid: cible_de_rappel(pos[sid], z, pas_cycle, 0)
+                    for sid, z in restants.items()})
+                time.sleep(0.05)
+        except LeaderBusError as e:
+            self.bus.set_torque(False)
+            self.bus.set_torque_limit(TORQUE_LIMIT_MAX)
+            resp.success = False
+            resp.message = "bus en echec pendant le recentrage : %s" % e
+            return resp
+        # Etat de repos. Deux cas, selon `recentrage_maintien_pct` :
+        #   0   -> couple coupe, bras libre a la main (defaut historique)
+        #   > 0 -> le guide TIENT sa pose ; on ecrit la cible avant de baisser le couple,
+        #          sinon le servo garde l'ancienne consigne et repart aussitot.
+        maintien = float(self.get_parameter("recentrage_maintien_pct").value)
+        if maintien > 0:
+            try:
+                pos = self.bus.read_positions()
+                self.bus.set_goal_position({sid: pos[sid] for sid in zeros
+                                            if sid in pos})
+            except LeaderBusError:
+                pass
+            self.bus.set_torque_limit(
+                int(TORQUE_LIMIT_MAX * maintien / 100.0))
+        else:
+            self.bus.set_torque(False)
+            self.bus.set_torque_limit(TORQUE_LIMIT_MAX)
+        if restants:
+            noms = ", ".join(self.name_of[sid] for sid in restants)
+            resp.success = False
+            resp.message = ("recentrage INCOMPLET apres %.0f s : %s n'ont pas atteint "
+                            "leur zero (butee, frottement, ou couple trop bas)"
+                            % (timeout, noms))
+        else:
+            resp.success = True
+            resp.message = ("guide recentre en %.1f s (%d axes), %s"
+                            % (time.monotonic() - t0, len(zeros),
+                               ("MAINTENU a %.0f %% de couple" % maintien) if maintien > 0
+                               else "couple recoupe : bras libre"))
+        self.get_logger().warn("/leader/recentrer -> %s" % resp.message)
+        return resp
 
     # ------------------------------------------------------------------ joystick
     def _srv_joystick(self, req, resp):

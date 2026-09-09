@@ -15,11 +15,11 @@ joints:
   nom_leader: axe_1_base
   nom_urdf: joint_1
   signe: -1.0
-  zero: 3.061054
+  zero: 3.060291671831854
   echelle: 1.0
   urdf_min: -3.14159
   urdf_max: 3.14159
-  continu: false
+  continu: true
   calibre: true
   course_leader: 4.121806
   notes: '1:1 EN ANGLE (choix Sam, 2026-09-05) : c''est le seul axe ou le proportionnel donnerait
@@ -31,15 +31,18 @@ joints:
     du 2026-09-05. 2026-09-05 : signe +1 -> -1 (verifie en teleoperation) et course de reference
     REDUITE de moitie — la vitesse maximale est atteinte avec un geste deux fois plus petit.
     Ce n''est pas une butee mecanique, seulement l''ecart considere comme ''a fond'' pour
-    le joystick.'
+    le joystick. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py), correspondance
+    -> 0.0 deg cote Roby. zero_urdf +0.0 -> -180.0 deg (decalage de +180 deg, roby_leader_offset.py).
+    continu: false -> true : la base couvre un tour complet cote Roby, ses butees sont une
+    couture et non un obstacle.'
   ecart_min: -0.989418
   ecart_max: 1.071486
-  zero_urdf: 0.0
+  zero_urdf: -3.141592653589793
 - id: 2
   nom_leader: axe_2_epaule
   nom_urdf: joint_2
   signe: 1.0
-  zero: 2.704408
+  zero: 3.0826196144110782
   echelle: 1.023534
   urdf_min: -1.6
   urdf_max: 2.1
@@ -51,15 +54,18 @@ joints:
     avec j2 decroissant). Sens opposes. Echelle reduite de 1 %% : sans marge, la butee du
     leader tombe EXACTEMENT sur celle de Roby et un simple arrondi declenche le clamp a chaque
     passage en butee — une alerte qui se declenche toujours ne signale plus rien. Cout : ~1
-    %% de course perdue.'
+    %% de course perdue. Signe +1 -> -1 (roby_leader_signe.py). Zero RELEVE sur la pose reelle
+    du guide (roby_leader_zero.py), correspondance -> 0.0 deg cote Roby. Signe -1 -> +1 (roby_leader_signe.py).
+    zero guide +156.6 -> +166.6 deg (decalage de +10 deg, roby_leader_offset.py --guide).
+    zero guide +166.6 -> +176.6 deg (decalage de +10 deg, roby_leader_offset.py --guide).'
   ecart_min: -1.352971
   ecart_max: 2.225806
-  zero_urdf: 0.25
+  zero_urdf: 0.0
 - id: 3
   nom_leader: axe_3_coude
   nom_urdf: joint_3
   signe: 1.0
-  zero: 2.68238
+  zero: 2.378351990461804
   echelle: 1.162129
   urdf_min: -3.0
   urdf_max: 0.65
@@ -71,15 +77,20 @@ joints:
     avec j3 croissant). Sens opposes. Echelle reduite de 1 %% : sans marge, la butee du leader
     tombe EXACTEMENT sur celle de Roby et un simple arrondi declenche le clamp a chaque passage
     en butee — une alerte qui se declenche toujours ne signale plus rien. Cout : ~1 %% de
-    course perdue. Zero repris sur la position courante le 2026-09-05 : 2.1932 -> 2.6824 rad.'
+    course perdue. Zero repris sur la position courante le 2026-09-05 : 2.1932 -> 2.6824 rad.
+    Signe +1 -> -1 (roby_leader_signe.py). Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py),
+    correspondance -> 0.0 deg cote Roby. Signe -1 -> +1 (roby_leader_signe.py). zero guide
+    +156.3 -> +166.3 deg (decalage de +10 deg, roby_leader_offset.py --guide). zero guide
+    +166.3 -> +146.3 deg (decalage de -20 deg, roby_leader_offset.py --guide). zero guide
+    +146.3 -> +136.3 deg (decalage de -10 deg, roby_leader_offset.py --guide).'
   ecart_min: -2.224272
   ecart_max: 0.885107
-  zero_urdf: -1.175
+  zero_urdf: 0.0
 - id: 4
   nom_leader: axe_4_poignet
   nom_urdf: joint_4
   signe: -1.0
-  zero: 5.335185
+  zero: 5.336719161054146
   echelle: 1.0
   urdf_min: -3.1416
   urdf_max: 3.1416
@@ -91,15 +102,17 @@ joints:
     le code retombait sur 180 deg par defaut et il fallait un demi-tour de poignet pour atteindre
     la vitesse maximale. 1,5708 rad (demi-course 45 deg) rend l''axe aussi vif que les autres.
     Ce n''est PAS une butee mecanique, seulement l''ecart considere comme ''a fond'' par le
-    joystick.'
+    joystick. Signe -1 -> +1 (roby_leader_signe.py). Signe +1 -> -1 (roby_leader_signe.py).
+    Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py), correspondance -> 0.0 deg
+    cote Roby.'
   ecart_min: null
   ecart_max: null
   zero_urdf: 0.0
 - id: 5
   nom_leader: axe_5_rot_poignet
   nom_urdf: joint_5
-  signe: -1.0
-  zero: 3.874835
+  signe: 1.0
+  zero: 3.882505374138558
   echelle: 0.87472
   urdf_min: -1.6
   urdf_max: 1.6
@@ -120,7 +133,8 @@ joints:
     en teleoperation (-1 -> +1). 2026-09-09 (Sam) : course de reference REDUITE DE MOITIE
     (3,6217 -> 1,8109 rad) pour doubler la vitesse a geste egal, meme methode que l''axe 1.
     La course mecanique reelle, elle, ne change pas. 2026-09-09 (Sam) : signe +1 -> -1, sens
-    inverse constate en teleoperation simulee.'
+    inverse constate en teleoperation simulee. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py),
+    correspondance -> 0.0 deg cote Roby. Signe -1 -> +1 (roby_leader_signe.py).'
   ecart_min: -0.572174
   ecart_max: 1.076855
   zero_urdf: 0.0

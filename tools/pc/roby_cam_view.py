@@ -59,8 +59,8 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
 </style></head><body>
 <h1>Roby — cameras live (15 Hz)</h1>
 <div class="row">
-  <div class="cam"><h2>LEFT — exterieure (obs du reseau)</h2><img src="/stream/left"></div>
-  <div class="cam"><h2>RIGHT — poignet</h2><img src="/stream/right"></div>
+  <div class="cam"><h2>RIGHT — EXTERIEURE (la vue du reseau)</h2><img src="/stream/right"></div>
+  <div class="cam"><h2>LEFT — poignet</h2><img src="/stream/left"></div>
 </div>
 <p class="note">Relais MJPEG des topics ROS. Aucun acces direct au materiel :
 ce visualiseur n'entre pas en conflit avec le noeud camera du Pi5.</p>

@@ -1,0 +1,10 @@
+# Trajectoire nettoyee "sortie du nid" (nid -> pose sortie), teleop demontree par Sam
+# le 2026-07-15 puis nettoyee (28657 echantillons -> 5 waypoints monotones, creux j3 retire).
+# Rejouable via ~/roby_sortie_nid.sh (FollowJointTrajectory vers /arm_controller).
+# Ordre joints : [joint_1, joint_2, joint_3, joint_4, joint_5] en radians.
+waypoints:
+  - [1.56267, 1.00824, 0.39232, 0.00000, 0.22510]   # nid (depart)
+  - [1.56267, 0.97344, 0.43677, 0.00000, 0.22510]   # j3 se leve un peu (degage le nid)
+  - [1.56267, 0.92976, 0.44471, 0.00000, 0.22510]
+  - [1.56267, 0.52412, 0.44471, 0.00000, 0.22510]   # j2 descend
+  - [0.69198, 0.52378, 0.44471, 0.00000, 0.22510]   # j1 pivote -> sortie

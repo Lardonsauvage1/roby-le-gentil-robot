@@ -72,26 +72,6 @@ J = O.J                            # ["joint_1"..."joint_5"]
 NEPS = 1e-6
 
 
-
-# --- Espace MODELE vs espace ROBOT (2026-09-07) -------------------------------
-# Les consignes qui traversent le garde sont COMPENSEES (joint_3 ne parcourt que
-# J3_SCALE de la course demandee, cf. NOTES_echelle_joint3.md). Les verifications
-# geometriques -- plancher par FK et anti-collision MoveIt -- doivent donc porter sur
-# la position REELLE du bras, pas sur la consigne. Sans cette conversion, le garde
-# croyait la pince ~3 cm PLUS HAUTE qu'elle n'est : il aurait laisse passer une
-# descente sous la table, soit exactement l'epaisseur de sa marge plancher.
-J3_SCALE = float(os.environ.get("ROBY_J3_SCALE", "0") or 0)
-J3_REF = float(os.environ.get("ROBY_J3_REF", "0.5237"))
-
-
-def _modele(q):
-    """Consigne compensee -> position reelle (espace modele). Identite si desactive."""
-    q = list(q)
-    if J3_SCALE > 0 and len(q) > 2:
-        q[2] = J3_REF + J3_SCALE * (q[2] - J3_REF)
-    return q
-
-
 class Guard(Node):
     def __init__(self, a):
         super().__init__("roby_guard")
@@ -177,20 +157,14 @@ class Guard(Node):
     def _check_floor(self, q):
         if self.a.no_floor:
             return True, ""
-        tcp = O.fk_pos(_modele(q))
+        tcp = O.fk_pos(list(q))
         floor = O._z_pick(float(tcp[0]), float(tcp[1])) - self.a.floor_margin
         if float(tcp[2]) < floor:
             return False, f"plancher : pince z={tcp[2]:.3f} < table {floor:.3f}"
         return True, ""
 
     def _check_collision(self, q):
-        """MoveIt : la config q est-elle en collision (table/socle/soi) ? Fail-safe.
-
-        ⚠️ q arrive COMPENSE (consigne robot). MoveIt raisonne dans l'espace du modele
-        URDF -> on de-compense avant de l'interroger, sinon la verification porte sur une
-        configuration qui n'est pas celle du bras.
-        """
-        q = _modele(q)
+        """MoveIt : la config q est-elle en collision (table/socle/soi) ? Fail-safe."""
         if self.a.no_moveit:
             return True, ""
         if not self.moveit.service_is_ready():

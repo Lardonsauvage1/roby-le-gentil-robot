@@ -17,4 +17,7 @@ export ROS_DOMAIN_ID=42
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export CYCLONEDDS_URI="file://$HOME/cyclone_config.xml"
 
-exec /usr/bin/python3 "$HOME/roby_oracle.py" --mode real --go --episodes 1 "$@"
+# tee vers un log (diagnostic) SANS priver le panneau de la sortie (il lit stdout).
+# PYTHONUNBUFFERED : sinon les prints sont bufferises et le log/panneau restent vides.
+export PYTHONUNBUFFERED=1
+/usr/bin/python3 "$HOME/roby_oracle.py" --mode real --go --episodes 1 "$@" 2>&1 | tee "$HOME/roby_oracle_last.log"

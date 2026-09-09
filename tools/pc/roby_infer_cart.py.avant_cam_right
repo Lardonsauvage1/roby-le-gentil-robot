@@ -47,35 +47,6 @@ from roby_tool_pickup import dls, rotvec                 # IK amortie + rotation
 # Pretraitement PARTAGE : meme implementation que roby_infer.py (cf roby_vision.py).
 # Le crop interne 84/112 est applique par LeRobot en eval() : ne PAS cropper ici.
 from roby_vision import decode_resize, image_keys, img_size_from_policy
-
-# --- Compensation d'echelle de joint_3 (2026-09-07) --------------------------
-# Le robot est commande en consigne COMPENSEE (joint_3 ne parcourt que J3_SCALE de la
-# course demandee, cf. NOTES_echelle_joint3.md). Le DATASET, lui, contient l'etat en
-# espace MODELE : `roby_dataset_to_cartesian.py --j3-scale` de-compense avant la FK.
-# Pour que le modele voie a l'inference EXACTEMENT ce qu'il a vu a l'entrainement, il
-# faut donc de-compenser l'observation ET re-compenser la consigne. Sans ca l'ecart
-# est de 15 mm medians, jusqu'a 33 mm (mesure) -- le modele travaille sur une geometrie
-# qui n'est pas la sienne. Opt-in : sans ROBY_J3_SCALE, ces deux fonctions ne font rien.
-J3_SCALE = float(os.environ.get("ROBY_J3_SCALE", "0") or 0)
-J3_REF = float(os.environ.get("ROBY_J3_REF", "0.5237"))
-
-
-def j3_vers_modele(q):
-    """Consigne lue sur /joint_states -> espace modele (= ce que le dataset contient)."""
-    if J3_SCALE <= 0:
-        return q
-    q = np.array(q, float).copy()
-    q[2] = J3_REF + J3_SCALE * (q[2] - J3_REF)
-    return q
-
-
-def j3_vers_robot(q):
-    """Espace modele -> consigne a envoyer au robot (inverse de j3_vers_modele)."""
-    if J3_SCALE <= 0:
-        return q
-    q = np.array(q, float).copy()
-    q[2] = J3_REF + (q[2] - J3_REF) / J3_SCALE
-    return q
 from roby_gripper import fermer as pince_fermer   # hysteresis : anti-claquement
 
 import rclpy
@@ -210,17 +181,7 @@ class InferCart(Node):
             f"num_inference_steps={a.steps}")
 
         self.lock = threading.Lock()
-        # ⚠️ CAMERA : le dataset propre (2026-09-07) est construit sur `right`, la vue
-        # EXTERIEURE -- c'est avec elle que le modele de juillet reussissait. Les deux
-        # cotes se sont INVERSES depuis : en juillet l'exterieure sortait sur `left`,
-        # aujourd'hui sur `right`. Lire le mauvais topic ne provoque aucune erreur, le
-        # modele voit simplement la mauvaise scene et echoue de facon deroutante.
-        # Verifier la correspondance avant chaque campagne : ROBY_INFER_CAM=left|right.
-        self.cam_side = os.environ.get("ROBY_INFER_CAM", "right").strip() or "right"
-        # Le modele du 2026-09-07 attend DEUX vues. Correspondance identique a celle du
-        # convertisseur du dataset : fixed <- right (exterieure), wrist <- left (poignet).
-        self.imgs = {"right": None, "left": None}
-        self.img = None
+        self.left = None
         self.joints = None
         self.buf = deque(maxlen=64)
         self.last_action = None
@@ -244,11 +205,8 @@ class InferCart(Node):
 
         qos_img = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                              history=HistoryPolicy.KEEP_LAST, depth=1)
-        for side in ("right", "left"):
-            self.create_subscription(
-                CompressedImage, f"/head_camera/{side}/image_raw/compressed",
-                (lambda sd: (lambda m: self._cimg(m, sd)))(side),
-                qos_img, callback_group=self.cb)
+        self.create_subscription(CompressedImage, "/head_camera/left/image_raw/compressed",
+                                 self._cl, qos_img, callback_group=self.cb)
         self.create_subscription(JointState, "/joint_states", self._cj, 10, callback_group=self.cb)
 
         self.pub_traj = self.create_publisher(JointTrajectory, "/guard/joint_trajectory", 10)
@@ -283,11 +241,9 @@ class InferCart(Node):
                 f"modele leger ({nparam/1e6:.0f}M) : budget {budget_s:.2f}s pour "
                 f"{self.policy.config.n_action_steps} actions -> mouvement quasi continu attendu.")
 
-    def _cimg(self, m, side):
+    def _cl(self, m):
         with self.lock:
-            self.imgs[side] = bytes(m.data)
-            if side == self.cam_side:
-                self.img = self.imgs[side]      # vue principale (compat mono-camera)
+            self.left = bytes(m.data)
 
     def _cj(self, m):
         idx = {n: i for i, n in enumerate(m.name)}
@@ -300,12 +256,9 @@ class InferCart(Node):
 
     def _get_obs(self):
         with self.lock:
-            # cle -> cote camera ; 'wrist'/'poignet' = left, tout le reste = right
-            besoin = {k: ("left" if ("wrist" in k or "poignet" in k) else "right")
-                      for k in self.img_keys}
-            if self.joints is None or any(self.imgs[c] is None for c in besoin.values()):
+            if self.left is None or self.joints is None:
                 return None
-            brut = {k: self.imgs[c] for k, c in besoin.items()}
+            l = self.left
             q = self.joints.copy()
         # TRUCAGE ARTICULAIRE COHERENT (2026-07-22) : l'observation est la CINEMATIQUE
         # DIRECTE de la position DE-TRUQUEE. On retire l'offset de joint_2 AVANT fkT ->
@@ -313,14 +266,11 @@ class InferCart(Node):
         # le DLS en sortie repart AUSSI de cette position de-truquee (cf _publish_tick),
         # donc tout le raisonnement vit dans le meme referentiel -> pas de derive.
         # (Ma 1re tentative faussait l'obs mais laissait le DLS partir du reel = incoherent.)
-        # De-compensation joint_3 AVANT la FK : l'etat doit etre dans le meme espace
-        # que celui du dataset, sinon le modele voit une geometrie decalee de 1,5-3,3 cm.
-        q_model = j3_vers_modele(q)
+        q_model = q.copy()
         q_model[1] -= np.radians(self.a.j2_offset)
         state = torch.from_numpy(tcp_of(q_model).astype(np.float32)).unsqueeze(0).to(self.dev)
-        obs = {k: decode_resize(v, self.dev, self.img_size) for k, v in brut.items()}
-        obs["observation.state"] = state
-        return obs
+        return {self.img_keys[0]: decode_resize(l, self.dev, self.img_size),
+                "observation.state": state}
 
     def _infer_loop(self):
         if self.a.rtc:
@@ -555,7 +505,7 @@ class InferCart(Node):
         # la consigne joint_2 envoyee au robot -> la pince suit un arc d'epaule qui la
         # tient j2_offset degres plus haut que la cible du modele (anti-raclage table).
         off = np.radians(self.a.j2_offset)
-        q_model = j3_vers_modele(q_cur)      # meme espace que l'observation et le dataset
+        q_model = q_cur.copy()
         q_model[1] -= off
 
         # --- clamp du pas cartesien : borne l'a-coup au redemarrage apres une pause ---
@@ -574,8 +524,6 @@ class InferCart(Node):
         # RE-TRUQUAGE : on ajoute l'offset a joint_2 sur la consigne finale. Le controle
         # de butees ci-dessous porte sur la valeur REELLEMENT envoyee (post-trucage).
         j[1] += off
-        # Retour vers l'espace ROBOT : le controleur attend une consigne compensee.
-        j = j3_vers_robot(j)
         self.last_fk_mm = fk_err * 1000
         if fk_err > FK_TOL or jump > JUMP_TOL:
             self.n_reject += 1

@@ -1,0 +1,14 @@
+# Bras guide (leader SO-ARM 101 modifie) -- carte bus serie Feetech STS3215.
+# US-016 / spec-teleoperation-bras-guide.
+#
+# La carte est identifiee par son NUMERO DE SERIE, jamais par son numero de port :
+# /dev/ttyACM0 (Winbond 0416:50a1 "USB Virtual COM") preexiste sur ce PC et n'a
+# aucun rapport avec la carte. Les numeros ttyACMx s'echangent au gre des branchements.
+#
+# Pont USB : QinHeng CH343, 1a86:55d3, serie 5B79030022.
+#
+# Installation :
+#   sudo cp ~/ros2_ws/tools/pc/udev/99-roby-leader.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=tty
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", ATTRS{serial}=="5B79030022", SYMLINK+="roby_leader", MODE="0660", GROUP="dialout"

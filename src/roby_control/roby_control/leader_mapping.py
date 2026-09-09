@@ -85,11 +85,37 @@ class JointMapping:
         parait bon a l'oeil alors qu'il ne suit plus.
         """
         q = self.zero_urdf + self.signe * self.echelle * self.ecart_deroule(q_leader)
+        if self.fait_le_tour():
+            # Axe qui fait le TOUR COMPLET : ses "butees" ne sont pas une limite
+            # physique mais une COUTURE de representation -- -181 deg et +179 deg sont
+            # la meme pose. Clamper y serait faux : le suivi se figerait au passage de
+            # la couture alors que rien ne l'empeche mecaniquement. On ENROULE donc,
+            # et il n'y a jamais de clamp a signaler.
+            #
+            # C'est ce qui permet de poser le repos n'importe ou sur le tour, par
+            # exemple a 180 deg quand la base du guide est montee a l'envers, sans
+            # perdre la moitie de la course.
+            centre = (self.urdf_min + self.urdf_max) / 2.0
+            q = centre + (q - centre + math.pi) % (2.0 * math.pi) - math.pi
+            return q, False
         if q < self.urdf_min:
             return self.urdf_min, True
         if q > self.urdf_max:
             return self.urdf_max, True
         return q, False
+
+    def fait_le_tour(self) -> bool:
+        """L'axe couvre-t-il un tour complet cote Roby ?
+
+        Soit il est declare `continu`, soit ses butees couvrent 360 deg -- auquel cas
+        elles sont une couture, pas un obstacle.
+
+        Tolerance de 1e-3 rad (0,06 deg) et non 1e-6 : les URDF ecrivent `3.14159`,
+        pas math.pi. La course vaut alors 6,28318, soit 5 millioniemes SOUS 2*pi, et
+        une tolerance trop fine faisait echouer la detection en silence -- l'axe
+        continuait a etre clampe sans qu'aucune erreur ne le dise.
+        """
+        return self.continu or (self.urdf_max - self.urdf_min) >= 2.0 * math.pi - 1e-3
 
     def convertir_inverse(self, q_roby: float) -> tuple[float, bool]:
         """Angle URDF Roby -> angle leader. Sert au REALIGNEMENT (US-022).
