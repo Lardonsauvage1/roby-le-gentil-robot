@@ -78,7 +78,8 @@ def main():
         j["notes"] = (j.get("notes", "") or "") + (
             " zero_urdf %+.1f -> %+.1f deg (decalage de %+.0f deg, "
             "roby_leader_offset.py)." % (math.degrees(av), math.degrees(ap), deg))
-        print("  %-10s zero_urdf %+7.1f -> %+7.1f deg" % (nom, math.degrees(av),
+        print("  %-10s zero_urdf %+7.1f -> %+7.1f deg" % (j["nom_urdf"],
+                                                          math.degrees(av),
                                                           math.degrees(ap)))
         marge_bas = math.degrees(ap - j["urdf_min"])
         marge_haut = math.degrees(j["urdf_max"] - ap)
