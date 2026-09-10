@@ -14,8 +14,8 @@
 # En-tetes recuperes depuis oneapi-src/level-zero v1.17.44 (version assortie au runtime
 # installe : libze_loader.so.1.17.44).
 
-export CPATH="$HOME/level_zero_headers:$CPATH"
-export LIBRARY_PATH="$HOME/level_zero_headers/lib:$LIBRARY_PATH"
+export CPATH="$HOME/level_zero_headers:${CPATH:-}"
+export LIBRARY_PATH="$HOME/level_zero_headers/lib:${LIBRARY_PATH:-}"
 
 # Python d'entrainement (torch 2.8.0+xpu + IPEX 2.8.10). NE PAS confondre avec le venv de
 # deploiement ~/lerobot-experiments/venv (torch CPU + OpenVINO) qui fait tourner le robot.

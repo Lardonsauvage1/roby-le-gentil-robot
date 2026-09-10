@@ -136,14 +136,19 @@ class InferCart(Node):
         self.img_keys = image_keys(self.policy)
         self.img_size = img_size_from_policy(self.policy, a.img_size)
 
-        # GARDE-FOU : ce noeud suppose etat 6D + action 7D. Si le checkpoint ne colle pas,
-        # c'est un modele JOINT -> refuser plutot que d'envoyer n'importe quoi au bras.
+        # GARDE-FOU : ce noeud accepte DEUX familles cartesiennes et rien d'autre.
+        #   6/7 : etat = pose TCP seule. Le modele ne voit pas sa pince.
+        #   7/7 : etat = pose TCP + etat de pince (0 ouvert / 1 ferme), encodage releve
+        #         dans le corpus le 2026-09-10. Le modele voit donc ce qu'il tient.
+        # Tout le reste est un modele joint ou inconnu -> refuser plutot que d'envoyer
+        # n'importe quoi au bras.
         sdim = int(self.policy.config.input_features["observation.state"].shape[-1])
         adim = int(self.policy.config.output_features["action"].shape[-1])
-        if (sdim, adim) != (6, 7):
+        if (sdim, adim) not in ((6, 7), (7, 7)):
             raise SystemExit(
                 f"❌ modele state={sdim} action={adim} : ce n'est PAS un modele cartesien "
-                f"(attendu 6/7). Pour un modele joint (5/6), utiliser roby_infer.py.")
+                f"(attendu 6/7 ou 7/7). Pour un modele joint (5/6), utiliser roby_infer.py.")
+        self.state_dim = sdim
 
         # Acceleration OpenVINO (iGPU Arc / NPU) : remplace le U-Net. Sur ce PC le CPU
         # deborde du cache pour les gros modeles ; l'iGPU les rend temps-reel (x12).
@@ -317,7 +322,16 @@ class InferCart(Node):
         # que celui du dataset, sinon le modele voit une geometrie decalee de 1,5-3,3 cm.
         q_model = j3_vers_modele(q)
         q_model[1] -= np.radians(self.a.j2_offset)
-        state = torch.from_numpy(tcp_of(q_model).astype(np.float32)).unsqueeze(0).to(self.dev)
+        vec = tcp_of(q_model)
+        if self.state_dim == 7:
+            # Le modele 7D attend l'etat de pince en 7e composante, encode 0 = ouverte,
+            # 1 = fermee (releve dans le corpus, pas suppose). La seule grandeur dont ce
+            # noeud dispose est la DERNIERE COMMANDE qu'il a envoyee, ce qui est aussi ce
+            # que le corpus enregistrait : l'oracle y notait sa commande, pas une mesure.
+            # Avant toute commande, last_grip vaut None et la pince est ouverte, comme au
+            # debut de chaque episode du corpus.
+            vec = np.concatenate([vec, [1.0 if self.last_grip else 0.0]])
+        state = torch.from_numpy(vec.astype(np.float32)).unsqueeze(0).to(self.dev)
         obs = {k: decode_resize(v, self.dev, self.img_size) for k, v in brut.items()}
         obs["observation.state"] = state
         return obs
