@@ -25,6 +25,14 @@ PY_DEPLOY = os.path.join(HOME, "lerobot-experiments/venv/bin/python")
 ENV = dict(os.environ)
 ENV.setdefault("ROBY_J3_SCALE", "0.9299")
 ENV.setdefault("ROBY_INFER_CAM", "right")
+# Epinglage de l'inference sur les P-cores (Core Ultra 9 185H : CPU 0-11 = 6 P-cores
+# + HT ; 12-19 E-cores, 20-21 LP-E). Sans lui, les 6 threads torch tombent en partie
+# sur les E-cores et le plus lent retarde les autres. Mesure 2026-09-12, meme modele,
+# bras immobile, DRY, sur CPU : 670 ms sans epinglage (hors budget 0,53 s) -> 497 ms
+# avec. Utile aussi avec l'iGPU (decodage images, pre/post-traitement restent CPU).
+# ROBY_INFER_CPUS="" desactive.
+ENV.setdefault("OMP_NUM_THREADS", "6")
+INFER_CPUS = os.environ.get("ROBY_INFER_CPUS", "0-11").strip()
 
 
 class Panel:
@@ -158,10 +166,17 @@ class Panel:
         cmd = [PY_DEPLOY, os.path.join(HOME, "roby_infer_cart.py"),
                "--model", MODEL, "--hz", "15", "--steps", "10",
                "--w-ori", "0.5", "--go"]
-        # iGPU seulement si demande : le CPU tient le budget (0.368 s mesure < 0.53 s)
-        # et laisse l'Arc libre pour un entrainement en parallele (boucle DAgger).
-        if os.environ.get("ROBY_INFER_IGPU", "").strip():
-            cmd += ["--igpu", os.environ["ROBY_INFER_IGPU"].strip()]
+        if INFER_CPUS:
+            cmd = ["taskset", "-c", INFER_CPUS] + cmd
+        # iGPU PAR DEFAUT (decision du 2026-09-10, commit e39ccbd : "l'iGPU n'est pas une
+        # option de confort"). L'ancien commentaire disait que le CPU tenait le budget
+        # (0.368 s au banc) : faux en conditions reelles. Mesure 2026-09-12, modele du
+        # 8 septembre, DRY : CPU 670 ms (497 ms epingle P-cores), iGPU 239 ms de mediane.
+        # Le modele doit avoir son export OpenVINO (unet_ov.xml) a cote des poids.
+        # ROBY_INFER_IGPU=non force le CPU (ex. : Arc occupe par un entrainement DAgger).
+        igpu = os.environ.get("ROBY_INFER_IGPU", "GPU").strip()
+        if igpu.lower() not in ("", "0", "non", "no", "none", "off"):
+            cmd += ["--igpu", igpu]
         # --- Anti-saccade -----------------------------------------------------
         # Par defaut LeRobot execute les actions [1:9] de l'horizon = le futur
         # IMMEDIAT. Or l'inference prend ~368 ms, soit 5,5 pas a 15 Hz : ces actions
