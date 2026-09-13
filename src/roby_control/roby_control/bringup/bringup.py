@@ -78,6 +78,20 @@ def build_tree():
 
 
 def main():
+    # PERIME (2026-09-13, spec-point-entree-unique-lancement). Ce bringup (re)lancait le groupe
+    # Pi5 sans verifier que le bras est au nid (relance hors nid = reference fausse, a-coup), et
+    # sa stack_spec date d'avant le 2026-07 (gripper_node/head_lock_node, rviz_only = URDF mock).
+    # Le lancement est porte par `roby up`, qui fait ces controles. Refus, sans rien toucher.
+    print(
+        "roby_control.bringup est perime : utiliser `roby up --nid-confirme` (vrai robot) ou "
+        "`roby up --sim`, et `roby status` pour le diagnostic.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def _ancien_main():
+    """Ancienne boucle de bringup, conservee pour le superviseur (spec-superviseur-stack)."""
     args = sys.argv[1:]
     if "--go-motors" in args:
         R.ALLOW_MOTORS = True
