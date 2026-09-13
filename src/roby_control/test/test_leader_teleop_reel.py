@@ -15,7 +15,12 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-DOMAINE = 87          # ni 42 (vraie stack) ni 43 (simulation isolee)
+# 89 : ni 42 (vraie stack) ni 43 (simulation isolee), ni 87/88 (tests du poignet BLDC,
+# que colcon test peut lancer EN MEME TEMPS). ROBY_TEST_DOMAIN_ID pour isoler des series
+# paralleles.
+DOMAINE = int(os.environ.get("ROBY_TEST_DOMAIN_ID", "89"))
+if DOMAINE in (42, 43):
+    raise RuntimeError("domaine DDS %d reserve : jamais pour un test" % DOMAINE)
 os.environ["ROS_DOMAIN_ID"] = str(DOMAINE)
 
 import rclpy  # noqa: E402

@@ -142,11 +142,16 @@ def test_signes_retenus():
     => Sur cette question, l'ESSAI prime sur la deduction. Ne pas "recorriger" ces
     valeurs a partir d'un raisonnement geometrique sans les avoir reverifiees sur le
     bras.
+
+    2026-09-09 : joint_4 inverse a nouveau, constate avec Sam en teleoperation simulee
+    (df8c071). Valeurs = table « Calibration en vigueur » de spec-teleoperation-bras-guide
+    (le fichier fait foi). Ce test figeait encore joint_4 a +1 : il echouait depuis.
     """
     cal = charger(CALIB)
     attendus = {"joint_1": -1.0,   # inverse une seconde fois apres essai (2026-09-05)
                 "joint_2": +1.0, "joint_3": +1.0,
-                "joint_4": +1.0, "joint_5": +1.0, "gripper": -1.0}
+                "joint_4": -1.0,   # inverse en teleoperation simulee (2026-09-09)
+                "joint_5": +1.0, "gripper": -1.0}
     for nom, signe in attendus.items():
         assert cal.par_nom[nom].signe == signe, nom
 
@@ -195,12 +200,12 @@ def test_echelles_du_fichier_couvrent_ce_qui_est_attendu():
     """
     cal = charger(CALIB)
 
-    # Axe 1 : 1:1 assume -> une partie de Roby reste inatteignable, mais aucun debordement.
+    # Axe 1 : 1:1, et CONTINU depuis le 2026-09-09 (fa2fe67) : la base couvre un tour
+    # complet cote Roby, il n'y a plus de butee a deborder. (Ce test verifiait encore le
+    # cas non continu d'avant : KeyError depuis.)
     a1 = cal.par_nom["joint_1"]
     assert a1.echelle == 1.0
-    c1 = a1.couverture()
-    assert c1["debordement_rad"] == 0
-    assert c1["inatteignable_rad"] > 2.0  # ~124 deg
+    assert a1.fait_le_tour()
 
     # Ce qui compte pour la SECURITE : aucun axe ne peut commander hors butee.
     # La couverture, elle, n'est plus un critere : depuis le passage en mode JOYSTICK
@@ -219,12 +224,15 @@ def test_echelles_du_fichier_couvrent_ce_qui_est_attendu():
     # Le leader en butee doit rester DANS la butee de Roby, avec la marge de 1 % : sans
     # elle, la butee du leader tombait pile sur celle de Roby et un arrondi suffisait a
     # declencher le clamp a chaque passage en bout de course.
+    # 2026-09-09 : zero_urdf passe a +60 deg (neutre du guide = poignet releve, regle en
+    # teleoperation simulee). La correspondance n'est plus centree : cote +, le guide
+    # atteint la butee de Roby AVANT la sienne, et la conversion PLAFONNE a la butee.
+    # Ce test exigeait « aucun clamp » (etat du 2026-09-05) et echouait depuis. Ce qui
+    # compte pour la securite reste verifie : jamais au-dela de la butee de Roby.
     demi = a5.course_leader / 2.0
     for bout in (a5.zero + demi, a5.zero - demi):
-        q, clampe = a5.convertir(bout)
-        assert clampe is False, "le leader en butee ne doit plus clamper"
-        assert abs(q) < a5.urdf_max, "et doit rester en deca de la butee de Roby"
-        assert abs(q) > 0.97 * a5.urdf_max, "tout en l'approchant de pres"
+        q, _clampe = a5.convertir(bout)
+        assert a5.urdf_min <= q <= a5.urdf_max, "jamais au-dela de la butee de Roby"
 
 
 def test_pince_normalisee_entre_zero_et_un():
@@ -247,19 +255,19 @@ def test_aller_retour_conversion():
 
 
 def test_realignement_impossible_hors_course_du_leader():
-    """Cas reel de l'axe 1 : 1:1, donc ~124 deg de Roby hors d'atteinte du bras guide.
+    """Cas reel de l'axe 5 : le guide n'en couvre qu'une partie (~1,4 rad sur 3,2).
 
     Le realignement doit ECHOUER proprement, jamais forcer contre la butee du leader.
+    (Ce test portait sur l'axe 1, devenu continu le 2026-09-09 : tout y est atteignable.)
     """
     cal = charger(CALIB)
-    a1 = cal.par_nom["joint_1"]
-    # On raisonne sur les bornes DECLAREES et non sur la course mecanique : celle de
-    # joint_1 est volontairement reduite de moitie pour le joystick (2026-09-05), donc
-    # `course_leader` ne represente plus l'ecart utile.
-    lo, hi = a1.bornes_ecart()
-    q_dedans = a1.zero_urdf + a1.signe * a1.echelle * (0.9 * hi)
-    assert a1.convertir_inverse(q_dedans)[1] is True
-    _, ok = a1.convertir_inverse(a1.urdf_max)   # bout de course de Roby
+    a5 = cal.par_nom["joint_5"]
+    assert a5.couverture()["inatteignable_rad"] > 1.0
+    lo, hi = a5.bornes_ecart()
+    q_dedans = a5.zero_urdf + a5.signe * a5.echelle * (0.5 * hi)
+    assert a5.convertir_inverse(q_dedans)[1] is True
+    # zero_urdf = +60 deg : c'est la butee NEGATIVE de Roby qui est hors de portee.
+    _, ok = a5.convertir_inverse(a5.urdf_min)
     assert ok is False
 
 
