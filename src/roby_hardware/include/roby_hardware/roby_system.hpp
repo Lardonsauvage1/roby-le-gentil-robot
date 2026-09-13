@@ -31,7 +31,11 @@ enum class JointType
 {
   STEPPER,
   SERVO,
-  MOCK
+  MOCK,
+  // Moteur BLDC pilote par une carte externe (axe 5 : B-G431B-ESC1 / SimpleFOC).
+  // Le plugin ne parle pas a la carte : il echange consigne/mesure par topics
+  // avec le noeud roby_wrist_bldc, seul maitre du port serie (cf ADR-004).
+  BLDC
 };
 
 struct JointInfo
@@ -95,6 +99,13 @@ private:
   void on_gripper(const std_msgs::msg::Bool::SharedPtr msg);
   // Reglage LIVE du serrage : angle brut en degres (topic /roby/gripper_deg).
   void on_gripper_deg(const std_msgs::msg::Float64::SharedPtr msg);
+
+  /// Axe BLDC : etat publie par le noeud roby_wrist_bldc [position, courant, flags].
+  void on_bldc_state(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
+  /// Thread 100 Hz qui publie la derniere consigne BLDC (hors thread RT).
+  void bldc_publish_loop();
+  /// Mesure BLDC exploitable (liaison OK + recale + fraiche) ? Remplit `pos`.
+  bool bldc_feedback(double & pos) const;
 
   std::vector<JointInfo> joints_;
   std::vector<std::unique_ptr<StepperDriver>> steppers_;
@@ -163,6 +174,33 @@ private:
   double lock_unlocked_deg_ = 75.0;  // 75=deverrouille
   double gripper_open_deg_ = 120.0;
   double gripper_closed_deg_ = 55.0;
+
+  // --- Axe BLDC (joint_N_type = bldc) : pont par topics vers roby_wrist_bldc ---
+  // write() (thread RT) ne fait que poser la consigne dans un atomique ; un
+  // thread dedie la publie a 100 Hz. La mesure arrive par callback (thread de
+  // tuning) dans des atomiques lus par read(). Aucun E/S serie ni DDS dans le
+  // thread RT. Un seul joint BLDC supporte.
+  int bldc_joint_ = -1;  // index dans joints_, -1 = aucun
+  std::string bldc_command_topic_ = "/roby/wrist_bldc/command";
+  std::string bldc_state_topic_ = "/roby/wrist_bldc/state";
+  double bldc_state_timeout_s_ = 0.2;
+  double bldc_wait_on_activate_s_ = 8.0;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr bldc_cmd_pub_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr bldc_state_sub_;
+  std::thread bldc_pub_thread_;
+  std::atomic<bool> bldc_pub_running_{false};
+  std::atomic<double> bldc_cmd_{0.0};
+  std::atomic<bool> bldc_cmd_valid_{false};
+  std::atomic<double> bldc_meas_pos_{0.0};
+  std::atomic<int> bldc_meas_flags_{0};
+  std::atomic<int64_t> bldc_meas_stamp_ns_{0};  // steady_clock
+  // Derniere consigne envoyee : reference "courante" du clamp de vitesse (comme
+  // le compteur de pas des steppers), pour ne pas boucler sur la mesure bruitee.
+  double bldc_last_cmd_ = 0.0;
+  bool bldc_feedback_ok_ = false;  // pour ne journaliser que les transitions
+  // Bits de flags publies par le noeud (cf roby_wrist_bldc/node.py).
+  static constexpr int kBldcLinkOk = 1;
+  static constexpr int kBldcHomed = 2;
 
   // --- Partie B : recalage one-shot au settle (joint_2/3 open-loop) ---------
   // A l'arret (consigne stable + axes immobiles), grosse mediane des lectures

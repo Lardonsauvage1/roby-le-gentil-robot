@@ -1,0 +1,11 @@
+# Lien stable /dev/roby_wrist vers la carte B-G431B-ESC1 du poignet (axe 5).
+# Le numero /dev/ttyACMx change selon l'ordre de branchement (le bras guide
+# CH343 est aussi un ttyACM) : ce lien evite toute confusion.
+#
+# Installation sur le Pi5 :
+#   1. brancher la carte, relever son numero de serie ST-LINK :
+#        udevadm info -q property -n /dev/ttyACM0 | grep -E 'ID_VENDOR_ID|ID_SERIAL_SHORT'
+#   2. remplacer REMPLACER_PAR_LE_NUMERO ci-dessous
+#   3. sudo cp 99-roby-wrist.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger
+#   4. ls -l /dev/roby_wrist
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{serial}=="REMPLACER_PAR_LE_NUMERO", SYMLINK+="roby_wrist", GROUP="dialout", MODE="0660"

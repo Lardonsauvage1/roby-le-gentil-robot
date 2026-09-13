@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>roby_wrist_bldc</name>
+  <version>0.1.0</version>
+  <description>Axe 5 (poignet) BLDC : driver serie de la carte B-G431B-ESC1 (SimpleFOC) et noeud pont ros2_control.</description>
+  <maintainer email="rmurawka@4cad.fr">Sam</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>python3-serial</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
