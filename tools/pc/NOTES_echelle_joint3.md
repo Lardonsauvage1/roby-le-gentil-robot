@@ -76,7 +76,7 @@ d'envoi : `_exec_traj()` (lignes droites DLS) et `free_to()` (buts articulaires 
 **Sans la variable, elle ne fait rien.** Un redémarrage sans elle rend le comportement
 d'origine — c'est voulu, rien n'est écrit en dur.
 
-Sauvegarde : `roby_tool_pickup.py.avant_compensation_j3`.
+Sauvegarde : `roby_tool_pickup.py.avant_compensation_j3`, retiree du depot le 2026-09-13 ; la ressortir par `git show fa2fe67:tools/pc/roby_tool_pickup.py.avant_compensation_j3`.
 
 ### ⚠️ Effet de bord sur le dataset
 
