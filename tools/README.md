@@ -47,6 +47,20 @@ nouveau fichier) : la modification sortirait du dépôt sans être vue. Éditer 
 | `pc/roby_cam_view.py` / `.sh` | visualisation des 2 caméras (relais MJPEG, port 8081) |
 | `pi5/cam_pub_pi2_dual.py` | **nœud caméra** : les 2 capteurs dans UN process (ISP partagé) |
 | `pi5/launch_cams.sh` | lancement des caméras, avec garde anti-double-lancement |
+| `pc/roby_env.sh` | environnement ROS du PC (Jazzy, CycloneDDS, domaine 42, pyenv neutralisé) — à sourcer |
+| `pc/roby_fine_jog.py` / `.sh` | jog fin du vrai bras, lecture du TCP, capture de poses — envoie DIRECTEMENT à `arm_controller` : **ni garde ni MoveIt** (seul son anti-saut interne, aveugle à un état faux, cf. BUG-008) |
+| `pc/roby_infer_panel.py` | panneau « modèle sur le bras » : garde + inférence (RTC, iGPU, CPU épinglés), case **Enregistrer les essais** (bag MCAP + fiche `.run.json`) |
+| `pc/roby_rec_rollout.sh` | veilleur : enregistre les caméras pendant chaque essai du modèle (alternative à la case du panneau) |
+| `pc/roby_rec_serie.py` | marque les N prochains essais enregistrés comme une série liée |
+| `pc/roby_ov.py` | U-Net de la Diffusion Policy sur l'iGPU (OpenVINO) |
+| `pc/roby_train_xpu.py` | entraînement Diffusion Policy sur l'iGPU (XPU), budget de temps fixe |
+| `pc/roby_bag_to_lerobot.py` | conversion des bags en dataset LeRobot |
+| `pc/roby_eval_offline.py`, `pc/roby_eval_pince.py` | évaluer un modèle sur un épisode enregistré, sans robot |
+| `pc/roby_leader_node.sh` | nœud du **bras guide** SO-ARM 101 (`/dev/roby_leader`, couple coupé au démarrage) |
+| `pc/roby_leader_panel.py` / `.sh` | panneau du bras guide : recentrage, échelle, embrayage, état et réarmement du garde |
+| `pc/roby_leader_teleop_cart.sh`, `pc/roby_leader_teleop_pos.sh` | téléopération du bras **simulé** (cartésienne / en position) |
+| `pc/roby_leader_teleop_reel.sh` | téléopération du **vrai** bras via le garde (US-023) — jamais essayée sur le matériel au 2026-09-13 |
+| `pi5/pca_wake.sh` | réveil du PCA9685 après coupure d'alimentation — **fait bouger les servos** |
 
 ## Volontairement non versionnés
 
