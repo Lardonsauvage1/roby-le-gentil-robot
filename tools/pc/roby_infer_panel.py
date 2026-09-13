@@ -8,7 +8,7 @@ entraîné (médiane des débuts d'épisode du dataset) — donc prêt à relanc
 Le garde `roby_guard.py` est lancé/arrêté avec le panneau : l'inférence publie vers
 /guard/joint_trajectory, rien n'atteint le bras sans lui.
 """
-import os, signal, subprocess, threading, time
+import json, os, signal, subprocess, threading, time
 import tkinter as tk
 from tkinter import ttk
 
@@ -34,14 +34,65 @@ ENV.setdefault("ROBY_INFER_CAM", "right")
 ENV.setdefault("OMP_NUM_THREADS", "6")
 INFER_CPUS = os.environ.get("ROBY_INFER_CPUS", "0-11").strip()
 
+# --- Enregistrement des essais (case "Enregistrer les essais" du panneau) ----------
+# Un bag MCAP par essai, du clic DEMARRER au STOP (la remontee n'est pas enregistree),
+# nomme d'apres le modele et le mode, avec une fiche .run.json/.run.md ecrite AU
+# LANCEMENT (modele et reglages reels, pas deduits apres coup). Le resultat de l'essai
+# est laisse "a renseigner" : il est observe par l'operateur, jamais deduit.
+REC_DIR = os.path.expanduser(os.environ.get("ROBY_REC_DIR", "~/roby_datasets/rollouts"))
+REC_CPUS = os.environ.get("ROBY_REC_CPUS", "12-19")   # E-cores : ne rien voler au modele
+REC_TOPICS = [
+    "/head_camera/left/image_raw/compressed", "/head_camera/right/image_raw/compressed",
+    "/joint_states", "/roby_infer/action", "/roby_infer/gripper_raw", "/roby_infer/status",
+    "/guard/joint_trajectory", "/guard/gripper",
+]
+
+
+def _json_ou_vide(chemin):
+    try:
+        with open(chemin, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def details_modele(model):
+    """Identite du modele lue sur le disque (config.json / train_config.json)."""
+    cfg = _json_ou_vide(os.path.join(model, "config.json"))
+    tcfg = _json_ou_vide(os.path.join(model, "train_config.json"))
+    rel = model.split("/outputs/", 1)[-1].split("/")
+    entrainement = rel[0] if rel else "?"
+    checkpoint = os.path.basename(os.path.dirname(model.rstrip("/")))
+    inp, out = cfg.get("input_features", {}), cfg.get("output_features", {})
+    etat = inp.get("observation.state", {}).get("shape", ["?"])[0]
+    action = out.get("action", {}).get("shape", ["?"])[0]
+    return {
+        "chemin": model,
+        "entrainement": entrainement,
+        "checkpoint": checkpoint,
+        "corpus": tcfg.get("dataset", {}).get("repo_id"),
+        "etat_action": f"{etat}D/{action}D",
+        "cameras": [k.split(".")[-1] for k in inp if "image" in k],
+        "reprise_de": tcfg.get("policy", {}).get("pretrained_path"),
+        "export_openvino_present": any(os.path.exists(os.path.join(d, "unet_ov.xml"))
+                                       for d in (model, os.path.dirname(model.rstrip("/")))),
+    }
+
+
+def _slug(s):
+    return "".join(c if c.isalnum() or c in "-_." else "-" for c in s)
+
 
 class Panel:
     def __init__(self, root):
         self.root = root
         self.infer = None
         self.guard = None
+        self.rec = None          # processus ros2 bag record de l'essai en cours
+        self.rec_base = None     # chemin de l'essai enregistre (sans extension)
+        self.run = None          # fiche de l'essai (ecrite au lancement, completee au STOP)
         root.title("Roby — modèle sur le bras")
-        root.geometry("560x460")
+        root.geometry("560x520")
 
         ttk.Label(root, text=os.path.basename(os.path.dirname(os.path.dirname(MODEL))),
                   font=("TkDefaultFont", 11, "bold")).pack(pady=(12, 0))
@@ -61,6 +112,15 @@ class Panel:
                                 font=("TkDefaultFont", 16, "bold"), width=16, height=3,
                                 command=self.on_stop, state="disabled")
         self.b_stop.grid(row=0, column=1, padx=8)
+
+        # --- Enregistrement : s'applique au PROCHAIN demarrage, reste coche ensuite --
+        rf = ttk.Frame(root); rf.pack(pady=(2, 0))
+        self.rec_var = tk.BooleanVar(value=os.environ.get("ROBY_REC", "") in ("1", "oui", "true"))
+        tk.Checkbutton(rf, text="⏺ Enregistrer les essais (caméras + modèle) — au prochain DÉMARRER",
+                       variable=self.rec_var, font=("TkDefaultFont", 10, "bold")).pack(side="left")
+        self.rec_etat = tk.StringVar(value="")
+        tk.Label(root, textvariable=self.rec_etat, fg="#dc3545",
+                 font=("TkDefaultFont", 9, "bold"), wraplength=540).pack()
 
         # --- Pince : ce que le modele demande, en direct ----------------------
         # La DECISION seule ne suffit pas a comprendre : le modele sort une valeur
@@ -153,16 +213,111 @@ class Panel:
             return
         self.b_start.configure(state="disabled")
         self.etat.set("démarrage du garde puis du modèle…")
-        threading.Thread(target=self._start, daemon=True).start()
+        enregistrer = bool(self.rec_var.get())     # lu ici : tkinter reste dans son fil
+        threading.Thread(target=self._start, args=(enregistrer,), daemon=True).start()
 
-    def _start(self):
-        if not self.guard or self.guard.poll() is not None:
-            self.guard = subprocess.Popen(
-                ["bash", os.path.join(HOME, "roby_guard.sh")],
-                env=ENV, stdout=open("/tmp/guard.log", "w"),
-                stderr=subprocess.STDOUT, preexec_fn=os.setsid)
-            self._log(f"garde lancé (PID {self.guard.pid})")
-            time.sleep(4)
+    # ------------------------------------------------------------ enregistrement
+    def _rec_start(self, cmd):
+        """Lance le bag de l'essai et ecrit sa fiche AVANT le garde et le modele."""
+        mode = ("RTC" if "--rtc" in cmd else
+                "async-offset%s" % cmd[cmd.index("--exec-offset") + 1] if "--exec-offset" in cmd
+                else "async")
+        mod = details_modele(MODEL)
+        debut = time.strftime("%Y%m%d_%H%M%S")
+        nom = f"rollout_{debut}_{_slug(mod['entrainement'])}-{_slug(mod['checkpoint'])}_{mode}"
+        os.makedirs(REC_DIR, exist_ok=True)
+        self.rec_base = os.path.join(REC_DIR, nom)
+
+        def opt(o, defaut=None):
+            return cmd[cmd.index(o) + 1] if o in cmd else defaut
+
+        self.run = {
+            "essai": nom,
+            "debut": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "modele": mod,
+            "inference": {
+                "mode": mode,
+                "rtc_delay": opt("--rtc-delay", "4 (defaut)") if mode == "RTC" else None,
+                "rtc_guide": opt("--rtc-guide", "4 (defaut)") if mode == "RTC" else None,
+                "exec_offset": opt("--exec-offset"),
+                "accelerateur": opt("--igpu", "CPU"),
+                "cpus_modele": INFER_CPUS or "non epingle",
+                "omp_num_threads": ENV.get("OMP_NUM_THREADS"),
+                "hz": opt("--hz"), "pas_de_diffusion": opt("--steps"), "w_ori": opt("--w-ori"),
+                "j3_scale": ENV.get("ROBY_J3_SCALE"), "camera_modele": ENV.get("ROBY_INFER_CAM"),
+                "commande": " ".join(cmd),
+            },
+            "pose_de_remontee": POSE_HAUTE,
+            "fin": None, "duree_s": None, "bag_ferme_proprement": None,
+            "resultat": "A RENSEIGNER (observe par l'operateur, jamais deduit)",
+            "remarques": [],
+        }
+        self._rec_ecrire_fiche()
+        self.rec = subprocess.Popen(
+            ["taskset", "-c", REC_CPUS, "ros2", "bag", "record", "-s", "mcap",
+             "-o", self.rec_base, "--topics", *REC_TOPICS],
+            env=ENV, stdout=open(self.rec_base + ".bag.log", "w"),
+            stderr=subprocess.STDOUT, preexec_fn=os.setsid)
+        self._log(f"⏺ enregistrement : {nom}")
+        self.root.after(0, lambda: self.rec_etat.set(f"● ENREGISTREMENT  {nom}"))
+
+    def _rec_stop(self):
+        """Ferme le bag PROPREMENT. SIGTERM et non SIGINT : lance depuis un process
+        sans controle de taches, rosbag2 herite de SIGINT ignore (vecu 2026-09-13)."""
+        if not self.rec:
+            return
+        t0 = time.time()
+        try:
+            os.killpg(os.getpgid(self.rec.pid), signal.SIGTERM)
+            self.rec.wait(timeout=10)
+            propre = True
+        except Exception:
+            propre = False
+            try: os.killpg(os.getpgid(self.rec.pid), signal.SIGKILL)
+            except Exception: pass
+            self.run["remarques"].append("enregistreur tue apres 10 s : bag a reindexer "
+                                         "(ros2 bag reindex -s mcap <dossier>)")
+        self.run["fin"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        self.run["duree_s"] = round(t0 - time.mktime(time.strptime(self.run["debut"], "%Y-%m-%d %H:%M:%S")), 1)
+        self.run["bag_ferme_proprement"] = propre and os.path.exists(
+            os.path.join(self.rec_base, "metadata.yaml"))
+        self._rec_ecrire_fiche()
+        self._log(("⏹ enregistrement fermé : " if propre else "⚠️ enregistrement tué : ")
+                  + os.path.basename(self.rec_base))
+        self.root.after(0, lambda: self.rec_etat.set(""))
+        self.rec = None
+
+    def _rec_ecrire_fiche(self):
+        r = self.run
+        with open(self.rec_base + ".run.json", "w", encoding="utf-8") as fh:
+            json.dump(r, fh, ensure_ascii=False, indent=2)
+        m, i = r["modele"], r["inference"]
+        lignes = [
+            f"# {r['essai']}", "",
+            f"**Résultat : {r['resultat']}**", "",
+            f"- Début {r['debut']} · fin {r['fin'] or '—'} · durée {r['duree_s'] or '—'} s"
+            f" · bag fermé proprement : {r['bag_ferme_proprement']}", "",
+            "## Modèle",
+            f"- `{m['entrainement']}` / checkpoint `{m['checkpoint']}` — {m['etat_action']},"
+            f" caméra(s) {', '.join(m['cameras']) or '?'}, corpus `{m['corpus']}`",
+            f"- Chemin : `{m['chemin']}`",
+            f"- Reprise de : `{m['reprise_de']}` · export OpenVINO présent : {m['export_openvino_present']}", "",
+            "## Inférence (relevée au lancement)",
+            f"- Mode {i['mode']}" + (f" (gel {i['rtc_delay']}, guidage {i['rtc_guide']})" if i["mode"] == "RTC" else "")
+            + (f" · exec-offset {i['exec_offset']}" if i["exec_offset"] else ""),
+            f"- Accélérateur {i['accelerateur']} · CPU {i['cpus_modele']} · OMP {i['omp_num_threads']}",
+            f"- {i['hz']} Hz · {i['pas_de_diffusion']} pas de diffusion · w_ori {i['w_ori']}"
+            f" · j3_scale {i['j3_scale']} · caméra {i['camera_modele']}",
+            f"- Commande : `{i['commande']}`", "",
+            "## Remarques", *([f"- {x}" for x in r["remarques"]] or ["- aucune"]), "",
+            f"Bag : `{self.rec_base}/` · journal `{self.rec_base}.bag.log`", "",
+        ]
+        with open(self.rec_base + ".run.md", "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lignes))
+
+    def _start(self, enregistrer=False):
+        # La commande du modele est construite AVANT tout lancement : la fiche de
+        # l'essai enregistre les reglages reels, et le bag demarre des le clic.
         cmd = [PY_DEPLOY, os.path.join(HOME, "roby_infer_cart.py"),
                "--model", MODEL, "--hz", "15", "--steps", "10",
                "--w-ori", "0.5", "--go"]
@@ -191,6 +346,19 @@ class Panel:
                     cmd += [f, os.environ[v].strip()]
         elif os.environ.get("ROBY_EXEC_OFFSET", "").strip():
             cmd += ["--exec-offset", os.environ["ROBY_EXEC_OFFSET"].strip()]
+        if enregistrer:
+            try:
+                self._rec_start(cmd)
+            except Exception as e:       # un enregistrement rate ne doit pas bloquer l'essai
+                self.rec = None
+                self._log(f"⚠️ enregistrement NON lancé : {e}")
+        if not self.guard or self.guard.poll() is not None:
+            self.guard = subprocess.Popen(
+                ["bash", os.path.join(HOME, "roby_guard.sh")],
+                env=ENV, stdout=open("/tmp/guard.log", "w"),
+                stderr=subprocess.STDOUT, preexec_fn=os.setsid)
+            self._log(f"garde lancé (PID {self.guard.pid})")
+            time.sleep(4)
         # Les sorties partaient dans /dev/null : un plantage du modele ou un refus du
         # garde etaient donc totalement muets, le panneau affichant "modele lance" sans
         # rien verifier. Vecu le 2026-09-10 : "pourquoi le modele ne fait rien ?" sans
@@ -220,6 +388,7 @@ class Panel:
                     except Exception: pass
                 self._log(f"{nom} arrêté")
         self.infer = self.guard = None
+        self._rec_stop()             # l'essai s'arrete ici : la remontee n'est pas enregistree
         time.sleep(1.5)
         self._log(f"remontée vers « {POSE_HAUTE} »…")
         self.root.after(0, lambda: self.etat.set("remontée du bras vers la pose haute…"))

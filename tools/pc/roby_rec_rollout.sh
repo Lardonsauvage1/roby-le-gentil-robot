@@ -27,15 +27,20 @@ TOPICS=(
   /guard/joint_trajectory /guard/gripper
 )
 
-# Motifs en [x]yz : pgrep -f ne doit pas trouver ce script lui-meme.
-actif() { pgrep -f "[r]oby_guard.py|[r]oby_infer_cart.py .*--go" >/dev/null; }
+# Seuls de VRAIS processus Python executant ces scripts comptent (motif ancre en debut
+# de ligne de commande). Un motif libre "roby_guard.py" declenchait aussi sur tout
+# processus citant ce nom (editeur, shell de test...) : vecu le 2026-09-13, un bag
+# parasite de 99 s bras immobile.
+actif() {
+  pgrep -f "^[^ ]*python[^ ]* [^ ]*roby_guard\.py|^[^ ]*python[^ ]* [^ ]*roby_infer_cart\.py .*--go" >/dev/null
+}
 
 echo "veilleur pret : $(date '+%F %T') -> $OUT_ROOT"
 while true; do
   until actif; do sleep 0.2; done
   BAG="$OUT_ROOT/rollout_$(date +%Y%m%d_%H%M%S)"
   echo "$(date '+%T') DEMARRER detecte -> $BAG"
-  taskset -c 12-19 ros2 bag record -s mcap -o "$BAG" "${TOPICS[@]}" > "$BAG.log" 2>&1 &
+  taskset -c 12-19 ros2 bag record -s mcap -o "$BAG" --topics "${TOPICS[@]}" > "$BAG.log" 2>&1 &
   REC=$!
   MODEL=""
   while actif; do
@@ -43,7 +48,17 @@ while true; do
     [ -z "$MODEL" ] && MODEL=$(pgrep -af "[r]oby_infer_cart.py" | grep -oE -- "--model [^ ]+" | head -1)
     sleep 0.2
   done
-  kill -INT "$REC" 2>/dev/null; wait "$REC" 2>/dev/null
+  # SIGTERM et PAS SIGINT : lance en arriere-plan par un script (sans controle de
+  # taches), l'enregistreur HERITE de SIGINT ignore -> kill -INT ne fait rien et le bag
+  # continue indefiniment (vecu le 2026-09-13 : 2 min 50 enregistrees apres STOP).
+  # SIGTERM est gere par rosbag2 : fermeture propre, metadata.yaml ecrit.
+  kill -TERM "$REC" 2>/dev/null
+  for _ in $(seq 1 50); do kill -0 "$REC" 2>/dev/null || break; sleep 0.2; done
+  if kill -0 "$REC" 2>/dev/null; then
+    kill -KILL "$REC" 2>/dev/null
+    echo "$(date '+%T') ATTENTION : enregistreur tue apres 10 s (bag a reindexer : ros2 bag reindex)"
+  fi
+  wait "$REC" 2>/dev/null
   echo "${MODEL:-modele inconnu (aucun roby_infer_cart vu pendant ce test)}" > "$BAG.info"
   echo "$(date '+%T') STOP detecte -> bag ferme : $BAG"
 done
