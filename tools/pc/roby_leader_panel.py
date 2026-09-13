@@ -12,6 +12,7 @@ chemin, puis couple RECOUPE. L'etat de repos du guide reste "libre a la main".
     bash ~/roby_leader_panel.sh
 """
 import threading
+import time
 import tkinter as tk
 from tkinter import ttk
 
@@ -20,7 +21,7 @@ from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, String
 from std_srvs.srv import SetBool, Trigger
 
 
@@ -32,6 +33,10 @@ class Panneau(Node):
         self.cli_embrayage = self.create_client(SetBool, "/teleop_cart/embrayage")
         self.cli_maintien = self.create_client(SetBool, "/leader/maintien")
         self.cli_pose = self.create_client(Trigger, "/teleop_cart/pose_travail")
+        self.cli_reset = self.create_client(Trigger, "/guard/reset")
+        self.garde = None
+        self.t_garde = None
+        self.create_subscription(String, "/guard/status", self._cb_garde, 10)
         self.cli_param = self.create_client(
             SetParameters, "/leader_teleop_cart/set_parameters")
         self.etat_cart = None
@@ -42,6 +47,10 @@ class Panneau(Node):
 
     def _cb(self, _m):
         self.n_msgs += 1
+
+    def _cb_garde(self, m):
+        self.garde = m.data
+        self.t_garde = time.monotonic()
 
     def _cb_cart(self, m):
         self.etat_cart = list(m.data)
@@ -58,7 +67,7 @@ def main():
 
     root = tk.Tk()
     root.title("Bras guide")
-    root.geometry("440x580")
+    root.geometry("440x640")
     root.minsize(440, 480)
     # Redimensionnement VERTICAL autorise : la largeur est figee pour que les boutons
     # gardent leur place, mais brider la hauteur avait fini par couper les boutons du
@@ -71,7 +80,7 @@ def main():
     # se déplacent SOUS LE DOIGT. Ils sont donc relégués dans un bandeau du bas, de
     # hauteur imposée, avec propagation coupée : quoi qu'il s'y affiche, rien d'autre
     # ne bouge.
-    bas = ttk.Frame(root, height=118)
+    bas = ttk.Frame(root, height=140)
     bas.pack(side="bottom", fill="x")
     bas.pack_propagate(False)
 
@@ -84,7 +93,11 @@ def main():
     ttk.Label(bas, textvariable=etat, wraplength=400, justify="left",
               anchor="nw").pack(fill="both", expand=True, padx=12, pady=(6, 0))
     ttk.Label(bas, textvariable=suivi, foreground="#555", wraplength=400,
-              justify="left", anchor="sw").pack(fill="x", padx=12, pady=(0, 8))
+              justify="left", anchor="sw").pack(fill="x", padx=12, pady=(0, 2))
+    garde = tk.StringVar(value="")
+    lab_garde = tk.Label(bas, textvariable=garde, wraplength=400, justify="left",
+                         anchor="sw")
+    lab_garde.pack(fill="x", padx=12, pady=(0, 8))
 
     def appeler(client, requete, libelle):
         etat.set("%s..." % libelle)
@@ -177,6 +190,13 @@ def main():
                command=lambda: appeler(n.cli_embrayage, SetBool.Request(data=False),
                                        "debrayage")).pack(side="left", expand=True,
                                                           fill="x", ipady=8, padx=(4, 0))
+    # GARDE (vrai bras, ADR-003). Apres un gel -- plancher, collision --, le garde ne
+    # laisse plus rien passer tant qu'on ne l'a pas rearme, et la teleop refuse
+    # d'embrayer. Sans ce bouton il fallait un terminal : constate le 2026-09-13, le
+    # bras paraissait mort. Rearmer ne fait rien bouger ; il faut ensuite EMBRAYER.
+    ttk.Button(cadre, text="REARMER LE GARDE (apres un gel)",
+               command=lambda: appeler(n.cli_reset, Trigger.Request(),
+                                       "rearmement du garde")).pack(fill="x", pady=(8, 0))
 
     def rafraichir():
         if n.etat_cart and len(n.etat_cart) >= 4:
@@ -185,6 +205,18 @@ def main():
                       "marge singularite %.3f"
                       % (1.0 / k if k else 0, "EMBRAYE" if emb > 0.5 else "debraye",
                          err, sig))
+        age = None if n.t_garde is None else time.monotonic() - n.t_garde
+        if n.garde is None or age is None or age > 2.0:
+            garde.set("garde : absent (normal avec le bras simule seul, "
+                      "obligatoire pour le vrai bras)")
+            lab_garde.config(foreground="#555")
+        elif n.garde.startswith("FROZEN"):
+            raison = n.garde[len("FROZEN["):n.garde.rfind("]")]
+            garde.set("GARDE GELE : %s -- verifier, puis REARMER LE GARDE" % raison)
+            lab_garde.config(foreground="#c0392b")
+        else:
+            garde.set("garde : OK")
+            lab_garde.config(foreground="#1e8449")
         if n.n_msgs and etat.get() == "connexion...":
             etat.set("guide connecte (%d messages recus)" % n.n_msgs)
         root.after(300, rafraichir)

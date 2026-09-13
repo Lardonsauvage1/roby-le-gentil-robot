@@ -1,0 +1,6 @@
+# Comme sur le Pi (roby_hardware/config/roby_controllers.yaml) : le JTC enchaine les
+# trajectoires depuis sa consigne, pas depuis la mesure. C'est ce qui decide de la
+# douceur du suivi quand la teleop remplace sa trajectoire a chaque envoi.
+arm_controller:
+  ros__parameters:
+    open_loop_control: true

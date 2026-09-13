@@ -49,6 +49,12 @@ POSE_TRAVAIL = [-0.2991, 0.8560, -0.4835, -0.0492, 1.3045]
 
 
 class TeleopCart(Node):
+    # Sortie du noeud. Ici le bras SIMULE : la pose calculee est publiee sur
+    # /joint_states. La sous-classe du vrai bras (leader_teleop_reel) n'y publie rien
+    # -- sur la vraie stack, ce topic appartient au robot.
+    PUBLIE_JOINT_STATES = True
+    MSG_SORTIE = "Aucun message vers le vrai robot."
+
     def __init__(self):
         super().__init__("leader_teleop_cart")
         self.declare_parameter("echelle", 1.0)
@@ -148,7 +154,8 @@ class TeleopCart(Node):
         self._tcp_ancre = None
         self._verif_saut = 0
 
-        self.pub = self.create_publisher(JointState, "/joint_states", 10)
+        self.pub = (self.create_publisher(JointState, "/joint_states", 10)
+                    if self.PUBLIE_JOINT_STATES else None)
         self.pub_etat = self.create_publisher(Float64MultiArray,
                                               "/teleop_cart/etat", 10)
         # On publie sur /oracle_debug : c'est le topic de marqueurs deja branche dans
@@ -184,9 +191,10 @@ class TeleopCart(Node):
         self.create_timer(0.5, self._recharger_si_change)
         self.get_logger().info(
             "Teleop CARTESIENNE prete : echelle 1:%.3g, w_ori %.2f, %.0f Hz. "
-            "%s. Aucun message vers le vrai robot."
+            "%s. %s"
             % (1.0 / self.k if self.k else 0, self.w_ori, hz,
-               "EMBRAYE" if self.embraye else "DEBRAYE (embrayer pour piloter)"))
+               "EMBRAYE" if self.embraye else "DEBRAYE (embrayer pour piloter)",
+               self.MSG_SORTIE))
 
     # ------------------------------------------------------------------ entrees
     def _p_outil(self, q):
@@ -590,7 +598,8 @@ class TeleopCart(Node):
         m.header.stamp = self.get_clock().now().to_msg()
         m.name = list(J)
         m.position = [float(v) for v in self.q]
-        self.pub.publish(m)
+        if self.pub is not None:
+            self.pub.publish(m)
         if self.guide is not None:
             T = fkT(self.q)
             err = float(np.linalg.norm(rotvec(T[:3, :3].T @ self.guide[1])))
@@ -653,7 +662,11 @@ class TeleopCart(Node):
         if self.cible_brute is None:
             return
         arr = MarkerArray()
-        tcp = fkT(self.q)[:3, 3]
+        # Le POINT COMMANDE (offset d'outil compris), comme la croix. fkT() seul donne
+        # link_gripper, 5 cm en arriere : les deux reperes restaient alors a 5 cm meme
+        # avec un suivi parfait, et la croix virait au rouge (seuil 3 cm) en
+        # permanence. Constate le 2026-09-13.
+        tcp = self._p_outil(self.q)
         # Rouge des que le bras ne rejoint plus ce qu'on lui demande : c'est le signal
         # qu'on sort de l'atteignable (butee, singularite, ou geste trop rapide).
         ecart = float(np.linalg.norm(self.cible_brute - tcp))
