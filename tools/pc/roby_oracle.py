@@ -706,11 +706,12 @@ def main():
     if args.mode == "real" and float(os.environ.get("ROBY_J3_SCALE", "0") or 0) <= 0:
         # Z_SURFACE_CUISINE et les corrections de table SUPPOSENT la compensation joint_3
         # active. Sans elle, la prise a D reste juste mais derive de +-2 cm ailleurs,
-        # jusque DANS la table au coin proche. Aucun lanceur ne la posait (revue du
-        # 2026-09-13) : on refuse plutot que de collecter dans la table.
-        sys.exit("REFUS : --mode real sans ROBY_J3_SCALE. Les hauteurs de prise supposent "
-                 "la compensation joint_3 : export ROBY_J3_SCALE=0.9299 (valeur du panneau "
-                 "d'inference), cf. NOTES_echelle_joint3.md.")
+        # jusque DANS la table au coin proche (revue du 2026-09-13). Le refus ajoute alors
+        # bloquait toute collecte (aucun lanceur ne pose la variable) : Niels a decide le
+        # 2026-09-13 de collecter SANS compensation pour l'instant => avertissement seul.
+        print("ATTENTION : --mode real sans ROBY_J3_SCALE (compensation joint_3 inactive, "
+              "choix du 2026-09-13) : prise juste a D, derive possible de +-2 cm ailleurs, "
+              "cf. NOTES_echelle_joint3.md.", file=sys.stderr)
     if args.mode == "real" and not args.go:
         print("REFUS : --mode real bouge le BRAS REEL. Relance avec --go (Sam present).")
         return
