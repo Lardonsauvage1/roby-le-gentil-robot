@@ -32,6 +32,25 @@ trouve son voisin dans `tools/pc/`.
 nouveau fichier) : la modification sortirait du dépôt sans être vue. Éditer le fichier dans
 `tools/`, ou vérifier avec `ls -l ~/roby_*.py` que ce sont toujours des liens.
 
+## Point d'entrée unique : `roby`
+
+Lancer, arrêter et piloter le robot passe par **`tools/pc/roby`** (lien `~/roby`). La procédure
+de `/roby-lancer-bras` y est écrite en code : chaque étape qui agit est précédée de contrôles
+(« portes », `pc/roby_gates.py`) qui arrêtent tout si l'état est faux.
+
+```
+roby status                   # tous les contrôles, sans rien toucher
+roby up --nid-confirme        # lance tout (tête AU NID) ; refuse si le bras est hors du nid
+roby sortie [--go]            # nid -> sortie, puis tête re-verrouillée et pince ouverte
+roby jog | collecte | scene | rentrer [--go] | down [--hors-nid]
+roby up --sim                 # MÊME chaîne en simulation, domaine 43 (jamais celui du bras)
+```
+
+Les programmes qui commandent le bras (jog, sortie du nid, prise d'outil/oracle, rejeux, séquences
+MoveIt, garde) refusent aussi de démarrer si la stack est incohérente, même lancés à la main.
+Chaque script prend son environnement dans `pc/roby_ros_env.sh` et son code **à côté de lui**
+(jamais `~/roby_*.py`) : une copie du dépôt exécute toujours son propre code.
+
 ## Points d'entrée principaux
 
 | Script | Rôle |

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# roby — point d'entree unique du robot (spec-point-entree-unique-lancement). `roby --help`.
+#
+# Le mode ne vient QUE de la ligne de commande : `--sim` => simulation (domaine 43), sinon vrai
+# robot (domaine 42). Un ROBY_SIM qui trainerait dans le shell est ecrase.
+export ROBY_SIM=0
+for a in "$@"; do [ "$a" = "--sim" ] && export ROBY_SIM=1; done
+ici="$(dirname "$(readlink -f "$0")")"
+source "$ici/roby_ros_env.sh" || exit 1
+exec /usr/bin/python3 "$ici/roby.py" "$@"
