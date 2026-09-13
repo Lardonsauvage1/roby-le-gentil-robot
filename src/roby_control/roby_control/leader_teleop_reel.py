@@ -32,7 +32,7 @@ Ce qui differe du bras simule, et pourquoi :
   la reduit pas), vitesse articulaire <= `vitesse_art_max_rad_s` (la base, recopiee du
   guide, echappe a la limite cartesienne), echelle <= `echelle_max_reel`.
 - PLANCHER VIRTUEL : la cible ne descend pas sous le plancher du garde + `plancher_marge_m`
-  (meme point, meme formule que roby_guard). Le bras glisse au ras de la table au lieu
+  (meme point, meme formule que roby_guard ; +2,5 cm = 5 mm au-dessus de la table). Le bras glisse au ras de la table au lieu
   de faire geler le garde ; le garde reste le dernier filet.
 - Espace ROBOT vs MODELE : /joint_states et le garde parlent en consigne COMPENSEE
   (ROBY_J3_SCALE, meme convention que roby_infer_cart et roby_guard). L'IK travaille en
@@ -174,7 +174,10 @@ class TeleopReel(TeleopCart):
         # valoir le --floor-margin du garde (0,03 par defaut).
         self.declare_parameter("plancher_virtuel", True)
         self.declare_parameter("plancher_marge_garde_m", 0.03)
-        self.declare_parameter("plancher_marge_m", 0.015)
+        # 0,025 : le plancher du garde (z_pick - 0,03) est 2 cm SOUS la surface de la
+        # table (z_pick = surface + 1 cm) ; +2,5 cm arrete donc la bride 5 mm au-dessus de
+        # la surface, a la profondeur de reprise de l'oracle (z_pick - 0,5 cm).
+        self.declare_parameter("plancher_marge_m", 0.025)
         self.declare_parameter("js_timeout_s", 0.3)
         self.declare_parameter("garde_timeout_s", 1.5)
         self.declare_parameter("maintien_s", 0.3)

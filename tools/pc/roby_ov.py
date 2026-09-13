@@ -70,11 +70,30 @@ def _example_inputs(pol):
     return torch.rand(1, H, A), torch.tensor([1], dtype=torch.long), gc
 
 
+def _poids(model_dir):
+    """Fichier de poids du modele (a cote de l'export, ou dans pretrained_model/)."""
+    for d in (model_dir, os.path.join(model_dir, "pretrained_model")):
+        f = os.path.join(d, "model.safetensors")
+        if os.path.exists(f):
+            return f
+    return None
+
+
 def ensure_ir(pol, model_dir):
-    """Genere l'IR OpenVINO du U-Net s'il n'existe pas. Retourne son chemin."""
+    """Genere l'IR OpenVINO du U-Net s'il n'existe pas ou s'il est PLUS ANCIEN que les
+    poids. Retourne son chemin.
+
+    L'export etait reutilise des qu'il existait : un checkpoint re-sauve au meme endroit
+    (reprise, DAgger) faisait tourner sur l'iGPU l'ANCIEN U-Net avec le nouvel encodeur
+    et la nouvelle normalisation, sans rien dire (revue du 2026-09-13). L'ecriture passe
+    maintenant par un fichier temporaire renomme (deux exports simultanes ne corrompent
+    plus le fichier)."""
     ir = os.path.join(model_dir, "unet_ov.xml")
     if os.path.exists(ir):
-        return ir
+        w = _poids(model_dir)
+        if w is None or os.path.getmtime(ir) >= os.path.getmtime(w):
+            return ir
+        print("[roby_ov] export OpenVINO PLUS ANCIEN que les poids : re-export", flush=True)
     import openvino as ov
     _patch_sinusoidal_f32()
     unet = pol.diffusion.unet.eval()
@@ -87,7 +106,10 @@ def ensure_ir(pol, model_dir):
 
     ex = _example_inputs(pol)
     ovm = ov.convert_model(W(unet).eval(), example_input=ex)
-    ov.save_model(ovm, ir)
+    tmp = os.path.join(model_dir, ".unet_ov.tmp%d.xml" % os.getpid())
+    ov.save_model(ovm, tmp)
+    os.replace(tmp[:-4] + ".bin", ir[:-4] + ".bin")    # .bin d'abord : le .xml fait foi
+    os.replace(tmp, ir)
     return ir
 
 

@@ -8,7 +8,7 @@ entraîné (médiane des débuts d'épisode du dataset) — donc prêt à relanc
 Le garde `roby_guard.py` est lancé/arrêté avec le panneau : l'inférence publie vers
 /guard/joint_trajectory, rien n'atteint le bras sans lui.
 """
-import json, os, signal, subprocess, threading, time
+import atexit, json, os, signal, subprocess, sys, threading, time
 import tkinter as tk
 from tkinter import ttk
 
@@ -89,6 +89,12 @@ class Panel:
         self.infer = None
         self.guard = None
         self.rec = None          # processus ros2 bag record de l'essai en cours
+        # Arret demande pendant le demarrage (fenetre fermee, STOP, signal) : le fil de
+        # demarrage ne doit plus rien lancer. Sans ce drapeau, fermer la fenetre pendant
+        # les 4 s d'attente du garde laissait le modele se lancer ensuite, ORPHELIN
+        # (revue du 2026-09-13).
+        self._arret_demande = False
+        self._verrou = threading.Lock()
         self.rec_base = None     # chemin de l'essai enregistre (sans extension)
         self.run = None          # fiche de l'essai (ecrite au lancement, completee au STOP)
         root.title("Roby — modèle sur le bras")
@@ -208,13 +214,23 @@ class Panel:
             self.root.after(0, lambda: self._log(msg))
 
     def _log(self, m):
-        self.log.insert("end", f"[{time.strftime('%H:%M:%S')}] {m}\n")
-        self.log.see("end")
+        ligne = f"[{time.strftime('%H:%M:%S')}] {m}"
+        try:
+            self.log.insert("end", ligne + "\n")
+            self.log.see("end")
+        except Exception:        # fenetre deja detruite (arret d'urgence, sortie)
+            print(ligne, flush=True)
 
     # ------------------------------------------------------------------ start
     def on_start(self):
         if self.infer:
             return
+        autre = _garde_etranger(self.guard)
+        if autre:
+            self.etat.set(f"⚠️ un autre garde tourne déjà (PID {autre}) : téléopération ? "
+                          "L'arrêter d'abord — deux gardes relaient le même topic.")
+            return
+        self._arret_demande = False
         self.b_start.configure(state="disabled")
         self.etat.set("démarrage du garde puis du modèle…")
         enregistrer = bool(self.rec_var.get())     # lu ici : tkinter reste dans son fil
@@ -356,20 +372,33 @@ class Panel:
             except Exception as e:       # un enregistrement rate ne doit pas bloquer l'essai
                 self.rec = None
                 self._log(f"⚠️ enregistrement NON lancé : {e}")
-        if not self.guard or self.guard.poll() is not None:
-            self.guard = subprocess.Popen(
-                ["bash", os.path.join(HOME, "roby_guard.sh")],
-                env=ENV, stdout=open("/tmp/guard.log", "w"),
-                stderr=subprocess.STDOUT, preexec_fn=os.setsid)
-            self._log(f"garde lancé (PID {self.guard.pid})")
+        with self._verrou:
+            if self._arret_demande:
+                self._log("arrêt demandé pendant le démarrage : rien n'est lancé")
+                return
+            if not self.guard or self.guard.poll() is not None:
+                self.guard = subprocess.Popen(
+                    ["bash", os.path.join(HOME, "roby_guard.sh")],
+                    env=ENV, stdout=open("/tmp/guard.log", "w"),
+                    stderr=subprocess.STDOUT, preexec_fn=os.setsid)
+                self._log(f"garde lancé (PID {self.guard.pid})")
+                attendre = True
+            else:
+                attendre = False
+        if attendre:
             time.sleep(4)
         # Les sorties partaient dans /dev/null : un plantage du modele ou un refus du
         # garde etaient donc totalement muets, le panneau affichant "modele lance" sans
         # rien verifier. Vecu le 2026-09-10 : "pourquoi le modele ne fait rien ?" sans
         # aucune trace nulle part. On les ecrit desormais dans des fichiers relisibles.
-        self.infer = subprocess.Popen(cmd, env=ENV, stdout=open("/tmp/infer.log", "w"),
-                                      stderr=subprocess.STDOUT, preexec_fn=os.setsid)
+        with self._verrou:
+            if self._arret_demande:
+                self._log("arrêt demandé pendant le démarrage : modèle NON lancé")
+                return
+            self.infer = subprocess.Popen(cmd, env=ENV, stdout=open("/tmp/infer.log", "w"),
+                                          stderr=subprocess.STDOUT, preexec_fn=os.setsid)
         self._log(f"modèle lancé (PID {self.infer.pid}) — le bras est AUTONOME")
+        self.root.after(1000, self._surveiller_modele)
         self.root.after(0, lambda: self.etat.set("⚠️ MODÈLE EN COURS — le bras bouge seul"))
         self.root.after(0, lambda: self.lbl.configure(fg="#dc3545"))
         self.root.after(0, lambda: self.b_stop.configure(state="normal"))
@@ -381,8 +410,30 @@ class Panel:
         self.lbl.configure(fg="#b8860b")
         threading.Thread(target=self._stop, daemon=True).start()
 
-    def _stop(self):
-        for nom, p in (("modèle", self.infer), ("garde", self.guard)):
+    def _surveiller_modele(self):
+        """Le modele s'est-il arrete tout seul ? Sans cela, un plantage laissait le panneau
+        afficher « MODELE EN COURS » (revue du 2026-09-13). Aucun mouvement n'est lance
+        ici : le garde reste en place (le bras tient), l'operateur decide avec STOP."""
+        p = self.infer
+        if p is None or self._arret_demande:
+            return
+        code = p.poll()
+        if code is None:
+            self.root.after(1000, self._surveiller_modele)
+            return
+        self._log(f"⚠️ le modèle s'est ARRÊTÉ tout seul (code {code}) — voir /tmp/infer.log")
+        self.etat.set("⚠️ MODÈLE ARRÊTÉ (plantage ?) — bras tenu par le garde ; STOP pour finir")
+        self.lbl.configure(fg="#dc3545")
+
+    def _couper_processus(self):
+        """Arrete modele, garde et enregistrement. AUCUN mouvement (pas de remontee) :
+        le bras garde sa derniere consigne. Sert a STOP (avant la remontee) et a l'arret
+        d'urgence du panneau (signal, sortie)."""
+        with self._verrou:
+            self._arret_demande = True
+            procs = (("modèle", self.infer), ("garde", self.guard))
+            self.infer = self.guard = None
+        for nom, p in procs:
             if p and p.poll() is None:
                 try:
                     os.killpg(os.getpgid(p.pid), signal.SIGINT)
@@ -391,8 +442,13 @@ class Panel:
                     try: os.killpg(os.getpgid(p.pid), signal.SIGKILL)
                     except Exception: pass
                 self._log(f"{nom} arrêté")
-        self.infer = self.guard = None
-        self._rec_stop()             # l'essai s'arrete ici : la remontee n'est pas enregistree
+        try:
+            self._rec_stop()
+        except Exception as e:
+            self._log(f"⚠️ fermeture de l'enregistrement : {e}")
+
+    def _stop(self):
+        self._couper_processus()     # l'essai s'arrete ici : la remontee n'est pas enregistree
         time.sleep(1.5)
         self._log(f"remontée vers « {POSE_HAUTE} »…")
         self.root.after(0, lambda: self.etat.set("remontée du bras vers la pose haute…"))
@@ -414,5 +470,50 @@ class Panel:
         self.root.destroy()
 
 
+def _garde_etranger(le_notre):
+    """PID d'un roby_guard.py qui n'est pas celui du panneau, ou None.
+
+    Deux gardes relaient le meme topic : un gel dans l'un est contourne par l'autre.
+    Motif ancre sur un vrai processus python (pas un shell qui cite le nom)."""
+    r = subprocess.run(["pgrep", "-f", r"^[^ ]*python[^ ]* [^ ]*roby_guard\.py"],
+                       capture_output=True, text=True)
+    notre = None
+    if le_notre is not None and le_notre.poll() is None:
+        notre = str(le_notre.pid)
+    for pid in r.stdout.split():
+        if pid == notre:
+            continue
+        try:   # le python du garde lance par NOTRE roby_guard.sh a pour parent ce bash
+            ppid = open(f"/proc/{pid}/stat").read().split()[3]
+        except OSError:
+            continue
+        if ppid != notre:
+            return pid
+    return None
+
+
 if __name__ == "__main__":
-    r = tk.Tk(); Panel(r); r.mainloop()
+    r = tk.Tk()
+    panneau = Panel(r)
+
+    # Le modele et le garde tournent dans leur propre groupe de processus : ils ne
+    # recoivent ni le Ctrl-C ni la fermeture du terminal du panneau. Avant le
+    # 2026-09-13, un panneau tue ainsi laissait le modele piloter le bras, sans bouton
+    # STOP. On les arrete donc sur signal et a la sortie -- sans remontee (aucun
+    # mouvement lance par un arret anormal). Un SIGKILL du panneau reste non couvert.
+    def _arret_urgence(signum, _frame):
+        panneau._couper_processus()
+        try:
+            r.destroy()
+        except Exception:
+            pass
+        sys.exit(128 + signum)
+
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _arret_urgence)
+    atexit.register(panneau._couper_processus)
+
+    def _battement():            # rend la main a Python : les signaux sont traites
+        r.after(250, _battement)
+    _battement()
+    r.mainloop()

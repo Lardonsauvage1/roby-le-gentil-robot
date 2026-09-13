@@ -300,7 +300,11 @@ class InferCart(Node):
             q = np.array([float(m.position[idx[j]]) for j in J], float)
             with self.lock:
                 self.joints = q
-            tcp = tcp_of(q)
+            # Pose REELLE, en espace MODELE (de-compensee joint_3) : la convention des
+            # bags *_cart et du dataset. Publiee jusqu'au 2026-09-13 en espace robot
+            # (jusqu'a ~3 cm d'ecart) : un enregistrement de rollouts pour DAgger aurait
+            # melange les deux reperes.
+            tcp = tcp_of(j3_vers_modele(q))
             self.pub_tcp.publish(Float64MultiArray(data=[float(v) for v in tcp]))
 
     def _get_obs(self):
@@ -662,7 +666,7 @@ class InferCart(Node):
             q = None if self.joints is None else self.joints.copy()
         if a is None or q is None:
             return
-        cur = tcp_of(q)
+        cur = tcp_of(j3_vers_modele(q))      # meme espace que la demande du modele
         d = np.asarray(a[:3], float) - cur[:3]
         self.get_logger().info(
             f"TCP reel [{cur[0]:+.3f} {cur[1]:+.3f} {cur[2]:+.3f}] -> demande "

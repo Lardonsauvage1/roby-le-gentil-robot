@@ -691,6 +691,14 @@ def main():
                     help="scenario RATTRAPAGE : depart A COTE de la pomme au ras de la table (rate), "
                          "se releve, se recale, ramasse, depose. Batch dedie batch_recovery_*.")
     args = ap.parse_args()
+    if args.mode == "real" and float(os.environ.get("ROBY_J3_SCALE", "0") or 0) <= 0:
+        # Z_SURFACE_CUISINE et les corrections de table SUPPOSENT la compensation joint_3
+        # active. Sans elle, la prise a D reste juste mais derive de +-2 cm ailleurs,
+        # jusque DANS la table au coin proche. Aucun lanceur ne la posait (revue du
+        # 2026-09-13) : on refuse plutot que de collecter dans la table.
+        sys.exit("REFUS : --mode real sans ROBY_J3_SCALE. Les hauteurs de prise supposent "
+                 "la compensation joint_3 : export ROBY_J3_SCALE=0.9299 (valeur du panneau "
+                 "d'inference), cf. NOTES_echelle_joint3.md.")
     if args.mode == "real" and not args.go:
         print("REFUS : --mode real bouge le BRAS REEL. Relance avec --go (Sam present).")
         return

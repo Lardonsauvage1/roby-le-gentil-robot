@@ -364,8 +364,8 @@ def test_plancher_virtuel_le_bras_glisse_sans_faire_geler_le_garde(banc):
     z = [fkT(reel.vers_modele(m.points[-1].positions))[2, 3] for _, m in banc.recues]
     p = fkT(reel.vers_modele(banc.recues[-1][1].points[-1].positions))[:3, 3]
     plancher_garde = reel.O._z_pick(p[0], p[1]) - 0.03
-    assert min(z) > plancher_garde + 0.01                 # jamais sous la marge
-    assert min(z) < plancher_garde + 0.02                 # mais il est bien descendu
+    assert min(z) > plancher_garde + 0.02                 # jamais sous la marge (2,5 cm)
+    assert min(z) < plancher_garde + 0.03                 # mais il est bien descendu
     # la main remonte de 2 cm : le bras decolle tout de suite (pas de zone morte)
     z_bas = z[-1]
     banc.cible_guide = banc.q_guide - 0.05 * d

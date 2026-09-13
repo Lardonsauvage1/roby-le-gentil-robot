@@ -47,6 +47,7 @@ Etat en direct    : ros2 topic echo /guard/status
 import argparse
 import os
 import sys
+import threading
 import time
 
 import numpy as np
@@ -103,6 +104,12 @@ class Guard(Node):
         self.last_q = None         # derniere consigne TRANSMISE (pour la vitesse en streaming)
         self.last_t = None         # instant (monotonic) de cette derniere consigne
         self.frozen = False        # gele apres une violation ?
+        # Les trajectoires sont traitees UNE PAR UNE. Le groupe reentrant (necessaire pour
+        # attendre MoveIt dans le callback) laissait deux callbacks se chevaucher des que
+        # MoveIt depassait ~66 ms : l'un pouvait publier APRES que l'autre ait gele et
+        # envoye le maintien -- le maintien etait alors ecrase -- ou publier une cible
+        # plus ancienne apres une plus recente (revue du 2026-09-13).
+        self._verrou_traj = threading.Lock()
         self.reason = ""           # pourquoi
         self.n_pass = 0            # consignes transmises
         self.n_clamp = 0           # points clampes (vitesse/pas/butee limites)
@@ -242,6 +249,10 @@ class Guard(Node):
         return qc, clamped
 
     def _on_nn_traj(self, msg):
+        with self._verrou_traj:
+            self._traiter_traj(msg)
+
+    def _traiter_traj(self, msg):
         if self.frozen:
             return                                        # gele (collision) : on ignore jusqu'au reset
         if self.cur is None:
@@ -299,10 +310,11 @@ class Guard(Node):
         self.pub_tr.publish(t)
 
     def _on_reset(self, req, resp):
-        self.frozen = False
-        self.reason = ""
-        self.last_q = None
-        self.last_t = None
+        with self._verrou_traj:          # jamais au milieu du traitement d'une trajectoire
+            self.frozen = False
+            self.reason = ""
+            self.last_q = None
+            self.last_t = None
         self.get_logger().warn("RESET : le garde reprend (verifie la scene avant de relancer le reseau).")
         resp.success = True
         resp.message = "garde reactive"

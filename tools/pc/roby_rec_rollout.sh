@@ -31,8 +31,11 @@ TOPICS=(
 # de ligne de commande). Un motif libre "roby_guard.py" declenchait aussi sur tout
 # processus citant ce nom (editeur, shell de test...) : vecu le 2026-09-13, un bag
 # parasite de 99 s bras immobile.
+# Seul le MODELE compte (plus le garde) : le garde tourne aussi pendant la teleoperation
+# du vrai bras (roby_leader_teleop_reel.sh), qui etait alors enregistree comme un essai
+# « modele inconnu » (revue du 2026-09-13).
 actif() {
-  pgrep -f "^[^ ]*python[^ ]* [^ ]*roby_guard\.py|^[^ ]*python[^ ]* [^ ]*roby_infer_cart\.py .*--go" >/dev/null
+  pgrep -f "^[^ ]*python[^ ]* [^ ]*roby_infer_cart\.py .*--go" >/dev/null
 }
 
 echo "veilleur pret : $(date '+%F %T') -> $OUT_ROOT"

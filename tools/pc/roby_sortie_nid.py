@@ -117,10 +117,18 @@ def main():
     print("goal accepte, execution...")
     rfut = gh.get_result_async()
     rclpy.spin_until_future_complete(node, rfut)
-    print("✅ termine.")
+    # Verifier le RESULTAT : un goal avorte (tolerance, arret) s'affichait « termine »
+    # comme un succes (revue du 2026-09-13).
+    res = rfut.result()
+    code = getattr(getattr(res, "result", None), "error_code", None)
+    from action_msgs.msg import GoalStatus
+    ok = res is not None and res.status == GoalStatus.STATUS_SUCCEEDED and code == 0
+    print("✅ termine." if ok else
+          "❌ trajectoire NON achevee (statut %s, error_code %s) : verifier la pose du bras"
+          % (getattr(res, "status", "?"), code))
     node.destroy_node()
     rclpy.shutdown()
-    return 0
+    return 0 if ok else 1
 
 
 sys.exit(main())
