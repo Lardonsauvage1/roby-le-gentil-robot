@@ -1,0 +1,53 @@
+_recentrage: 'Homing_Offset ecrits en EEPROM le 2026-09-05 pour supprimer le bouclage
+  : ID1=-1796, ID2=-1164, ID5=+1834 (ID3/4/6 inchanges). Les valeurs ci-dessus sont
+  dans le NOUVEAU repere. Sauvegarde de l''ancien : ~/roby_leader_calib.yaml.avant_recentrage'
+servos:
+  '1':
+    joint: axe_1_base
+    max_deg: 61.96
+    max_steps: 705
+    mid_deg: 176.92
+    mid_steps: 2013
+    min_deg: 298.12
+    min_steps: 3392
+    updated: 2026-09-02T17:35
+  '2':
+    joint: axe_2_epaule
+    max_deg: 77.43
+    max_steps: 881
+    mid_deg: 180.09
+    mid_steps: 2049
+    min_deg: 282.48
+    min_steps: 3214
+    updated: 2026-09-02T17:39
+  '3':
+    joint: axe_3_coude
+    max_deg: 204.43
+    max_steps: 2326
+    mid_deg: 124.89
+    mid_steps: 1421
+    min_deg: 26.28
+    min_steps: 299
+    updated: 2026-09-02T18:13
+  '4':
+    continuous: true
+    joint: axe_4_poignet
+    updated: 2026-09-02T18:18
+  '5':
+    joint: axe_5_rot_poignet
+    max_deg: 76.2
+    max_steps: 867
+    mid_deg: 190.72
+    mid_steps: 2170
+    min_deg: 283.71
+    min_steps: 3228
+    updated: 2026-09-02T18:25
+  '6':
+    joint: pince
+    max_deg: 65.57
+    max_steps: 746
+    mid_deg: 7.29
+    mid_steps: 83
+    min_deg: 321.5
+    min_steps: 3658
+    updated: 2026-09-02T17:30

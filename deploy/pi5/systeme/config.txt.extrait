@@ -1,0 +1,11 @@
+# Extrait de /boot/firmware/config.txt du Pi5 en service (releve le 2026-09-13), section [all].
+# Lignes dont la stack Roby a besoin : UART0, I2C (PCA9685), SPI, et les deux cameras ov5647
+# (camera_auto_detect=0 + un overlay par port CSI). dwc2 : USB gadget.
+dtparam=i2c_arm=on
+dtparam=spi=on
+dtparam=uart0=on
+camera_auto_detect=0
+dtoverlay=ov5647,cam0
+dtoverlay=ov5647,cam1
+dtoverlay=dwc2
+enable_uart=1
