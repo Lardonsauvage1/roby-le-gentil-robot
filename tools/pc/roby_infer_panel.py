@@ -182,7 +182,10 @@ class Panel:
             from rclpy.node import Node
             from std_msgs.msg import Bool, Float32
         except Exception as e:
-            self.root.after(0, lambda: self._log(f"affichage pince indisponible : {e}"))
+            # Message fige ICI : Python efface `e` a la sortie du bloc except, une
+            # lambda qui le lit plus tard levait NameError (message jamais affiche).
+            msg = f"affichage pince indisponible : {e}"
+            self.root.after(0, lambda: self._log(msg))
             return
         try:
             rclpy.init(args=None)
@@ -201,7 +204,8 @@ class Panel:
                                   lambda m: etat.__setitem__("ferme", bool(m.data)), 10)
             rclpy.spin(n)
         except Exception as e:
-            self.root.after(0, lambda: self._log(f"écoute pince arrêtée : {e}"))
+            msg = f"écoute pince arrêtée : {e}"
+            self.root.after(0, lambda: self._log(msg))
 
     def _log(self, m):
         self.log.insert("end", f"[{time.strftime('%H:%M:%S')}] {m}\n")
