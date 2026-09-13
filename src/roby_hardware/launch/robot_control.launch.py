@@ -13,7 +13,14 @@ Axe 5 (poignet) :
     wrist:=bldc   nouveau poignet BLDC : lance aussi le noeud roby_wrist_bldc, qui
                   recale la carte au nid au demarrage (tete AU NID avant de lancer).
                   Cote PC : pc_moveit.launch.py wrist:=bldc (limites de vitesse).
+
+Simulation (PC, `roby up --sim`) :
+    use_mock:=true  meme launch, meme URDF, memes controleurs, pose initiale = nid ; seul le
+                    materiel devient mock_components/GenericSystem. REFUSE sur le domaine 42 :
+                    un mock a cote du vrai bras = course au mock (steppers morts), cf. BUG-008.
 """
+
+import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, TimerAction
@@ -33,6 +40,12 @@ def generate_launch_description():
                 choices=["servo", "bldc"],
                 description="actionneur de l'axe 5 : servo (actuel) ou bldc (nouveau poignet)",
             ),
+            DeclareLaunchArgument(
+                "use_mock",
+                default_value="false",
+                choices=["false", "true"],
+                description="true = simulation (materiel mock), domaine 42 refuse",
+            ),
             OpaqueFunction(function=_setup),
         ]
     )
@@ -40,6 +53,11 @@ def generate_launch_description():
 
 def _setup(context):
     wrist = LaunchConfiguration("wrist").perform(context)
+    use_mock = LaunchConfiguration("use_mock").perform(context)
+    if use_mock == "true" and os.environ.get("ROS_DOMAIN_ID", "0") == "42":
+        raise RuntimeError(
+            "use_mock:=true refuse sur le domaine 42 (vrai robot) : simuler avec `roby up --sim` (domaine 43)."
+        )
     roby_hw_share = FindPackageShare("roby_hardware")
 
     robot_description = Command(
@@ -51,6 +69,8 @@ def _setup(context):
             ),
             " wrist:=",
             wrist,
+            " use_mock:=",
+            use_mock,
         ]
     )
 
@@ -124,7 +144,7 @@ def _setup(context):
         jsb_spawner,
         arm_spawner,
     ]
-    if wrist == "bldc":
+    if wrist == "bldc" and use_mock == "false":
         # Lance en meme temps que ros2_control : le plugin attend (8 s max) la
         # 1re mesure recalee du noeud avant d'activer joint_5.
         actions.insert(

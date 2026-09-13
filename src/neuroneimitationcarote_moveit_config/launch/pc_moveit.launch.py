@@ -20,6 +20,10 @@ Usage (PC) :
 
 Axe 5 : wrist:=bldc (a passer AUSSI a robot_control.launch.py sur le Pi5) limite
 joint_5 a ce que le poignet BLDC suit reellement (0.5 rad/s). Defaut : servo.
+
+Scene de collision : chargee ICI, automatiquement (scene:=cuisine par defaut, scene:=aucune
+pour s'en passer). Elle vit dans move_group : chaque relance la perdait, et on l'a oubliee
+pendant toute une seance d'essais du modele (2026-09-13). rviz:=false pour les essais sans ecran.
 """
 
 from moveit_configs_utils import MoveItConfigsBuilder
@@ -30,6 +34,7 @@ from moveit_configs_utils.launches import (
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
@@ -41,6 +46,12 @@ def generate_launch_description():
                 choices=["servo", "bldc"],
                 description="actionneur de l'axe 5 : servo (actuel) ou bldc (nouveau poignet)",
             ),
+            DeclareLaunchArgument(
+                "scene",
+                default_value="cuisine",
+                description="scene roby_environments chargee au demarrage (aucune = pas de scene)",
+            ),
+            DeclareLaunchArgument("rviz", default_value="true", choices=["true", "false"]),
             OpaqueFunction(function=_setup),
         ]
     )
@@ -48,6 +59,8 @@ def generate_launch_description():
 
 def _setup(context):
     wrist = LaunchConfiguration("wrist").perform(context)
+    scene = LaunchConfiguration("scene").perform(context)
+    rviz = LaunchConfiguration("rviz").perform(context)
     moveit_config = MoveItConfigsBuilder(
         "neuroneimitationcarote",
         package_name="neuroneimitationcarote_moveit_config"
@@ -98,8 +111,20 @@ def _setup(context):
         ld.add_action(action)
 
     # RViz avec le plugin MoveIt (visualisation + cible interactive)
-    for action in generate_moveit_rviz_launch(moveit_config).entities:
-        ld.add_action(action)
+    if rviz == "true":
+        for action in generate_moveit_rviz_launch(moveit_config).entities:
+            ld.add_action(action)
+
+    # Scene de collision : le chargeur attend move_group, charge, et s'arrete.
+    if scene != "aucune":
+        ld.add_action(
+            Node(
+                package="roby_environments",
+                executable="scene_loader",
+                arguments=["--env", scene, "--attente", "90"],
+                output="both",
+            )
+        )
 
     # PAS de robot_state_publisher (le Pi5 est l'unique publisher /robot_description).
     # PAS de static_tf world→base_link (fourni par le Pi5).

@@ -7,6 +7,9 @@
     <xacro:arg name="initial_positions_file" default="$(find roby_hardware)/config/initial_positions.yaml" />
     <!-- Axe 5 : servo (poignet actuel, defaut) ou bldc (nouveau poignet) -->
     <xacro:arg name="wrist" default="servo" />
+    <!-- Simulation seulement (commande roby en mode simulation, domaine 43) : mock_components a la place de RobySystem.
+         JAMAIS sur le Pi5 : c'est la course au mock, steppers morts. -->
+    <xacro:arg name="use_mock" default="false" />
 
     <!-- Import robot URDF -->
     <xacro:include filename="$(find neuroneimitationcarote_description)/urdf/robot.urdf.xacro" />
@@ -14,5 +17,5 @@
     <!-- Import steppers ros2_control config (joints 1-3 real, 4-5 mock) -->
     <xacro:include filename="$(find roby_hardware)/config/roby_hardware_steppers_only.ros2_control.xacro" />
 
-    <xacro:roby_hardware_ros2_control name="RobySystem" initial_positions_file="$(arg initial_positions_file)" use_mock="false" wrist="$(arg wrist)"/>
+    <xacro:roby_hardware_ros2_control name="RobySystem" initial_positions_file="$(arg initial_positions_file)" use_mock="$(arg use_mock)" wrist="$(arg wrist)"/>
 </robot>

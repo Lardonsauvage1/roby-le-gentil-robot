@@ -84,15 +84,16 @@ def make_object(obj, frame):
 
 
 class SceneLoader(Node):
-    def __init__(self):
+    def __init__(self, attente=10.0):
         super().__init__("scene_loader")
+        self.attente = attente
         self.apply_cli = self.create_client(ApplyPlanningScene,
                                             "apply_planning_scene")
         self.get_cli = self.create_client(GetPlanningScene,
                                           "get_planning_scene")
 
     def _wait(self, cli, name):
-        if not cli.wait_for_service(timeout_sec=10.0):
+        if not cli.wait_for_service(timeout_sec=self.attente):
             self.get_logger().error(
                 f"Service '{name}' indisponible — move_group est-il lancé ?")
             return False
@@ -191,30 +192,35 @@ def main():
                         help="effacer tous les obstacles")
     parser.add_argument("--list", action="store_true",
                         help="lister les environnements dispo")
+    parser.add_argument("--attente", type=float, default=10.0,
+                        help="secondes d'attente de move_group (lancement : 90)")
     args, _ = parser.parse_known_args()
 
     if args.list:
         print("Environnements disponibles :")
         for e in list_envs():
             print("  -", e)
-        return
+        return 0
 
     rclpy.init()
-    node = SceneLoader()
+    node = SceneLoader(attente=args.attente)
+    ok = False
     try:
         if args.clear:
-            node.clear()
+            ok = node.clear()
         elif args.file:
-            node.load_file(os.path.expanduser(args.file))
+            ok = node.load_file(os.path.expanduser(args.file))
         elif args.env:
-            node.load(args.env)
+            ok = node.load(args.env)
         else:
             node.get_logger().error(
                 "Préciser --env <nom> | --file <chemin> | --clear | --list")
     finally:
         node.destroy_node()
         rclpy.shutdown()
+    # Code retour : un echec doit se voir (avant : toujours 0, scene vide sans alerte)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
