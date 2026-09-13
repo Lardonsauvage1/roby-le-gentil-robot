@@ -11,7 +11,15 @@ unset GTK_PATH
 
 source /opt/ros/jazzy/setup.bash
 source /home/sam/ros2_ws/install/setup.bash
-export ROS_DOMAIN_ID=42
+# Domaine 43, JAMAIS 42 : 42 est celui de la vraie stack (Pi5). Ce launch demarre un robot
+# SIMULE (mock ros2_control + robot_state_publisher) ; sur 42 il publierait un second
+# /robot_description et un faux /joint_states a cote du vrai bras (course « mock » decrite
+# dans /roby-lancer-bras, BUG-008). Il utilisait 42 jusqu'au 2026-09-13.
+export ROS_DOMAIN_ID="${ROBY_SIM_DOMAIN_ID:-43}"
+if [ "$ROS_DOMAIN_ID" = "42" ]; then
+    echo "REFUS : domaine 42 = vraie stack. Simuler sur un autre domaine." >&2
+    exit 1
+fi
 
 echo "=== Lancement simulation neuroneimitationcarote ==="
 echo "  RMW: CycloneDDS (local)"

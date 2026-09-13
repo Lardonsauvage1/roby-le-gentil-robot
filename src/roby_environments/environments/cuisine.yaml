@@ -1,0 +1,208 @@
+# Environnement 'cuisine' — importe du plan 3D de la cuisine (equipe Le NIC).
+# Source : kitchen_collision.usda
+# Pose du robot dans la scene : t=(1.3078, -0.9379, 0.9141), yaw=90.0 deg — les obstacles
+# sont exprimes dans le repere BASE ROBOT (world), comme le veut roby_environments.
+# Filtre : obstacles a moins de 2.5 m de la base (les murs lointains sont inutiles
+# a la planification et alourdissent la scene).
+# GENERE par roby_usd_to_environment.py — ne pas editer a la main.
+frame: world
+objects:
+- name: Walls_wall_32d6fc0b_5797_409d_a95e_388fb432f96d_
+  type: box
+  size: [2.5008, 0.075, 2.5]
+  pose: [0.9379, 0.0574, 0.3359]
+  color: [0.92, 0.9, 0.86, 1.0]
+  rpy: [0.0, 0.0, -1.5708]
+- name: Walls_wall_32d6fc0b_5797_409d_a95e_388fb432f96d__2
+  type: box
+  size: [0.9, 0.075, 0.4]
+  pose: [0.9379, -1.643, 1.3859]
+  color: [0.92, 0.9, 0.86, 1.0]
+  rpy: [0.0, 0.0, -1.5708]
+- name: Walls_wall_32d6fc0b_5797_409d_a95e_388fb432f96d__3
+  type: box
+  size: [0.0362, 0.075, 2.5]
+  pose: [0.9379, -2.1111, 0.3359]
+  color: [0.92, 0.9, 0.86, 1.0]
+  rpy: [0.0, 0.0, -1.5708]
+- name: Walls_wall_c1f60d54_bbf4_42b2_8715_ca678f99d82f_
+  type: box
+  size: [4.687, 0.075, 2.5]
+  pose: [-1.4056, 1.3078, 0.3359]
+  color: [0.92, 0.9, 0.86, 1.0]
+  rpy: [0.0, 0.0, -3.14159]
+- name: Porte_b2fdef86_frame_00
+  type: box
+  size: [0.06, 0.844, 2.1]
+  pose: [0.5614, -1.223, 0.1359]
+  color: [0.76, 0.62, 0.42, 1.0]
+  rpy: [0.0, 0.0, -1.5708]
+- name: Porte_b2fdef86_frame_01
+  type: box
+  size: [0.06, 0.844, 2.1]
+  pose: [0.5614, -2.063, 0.1359]
+  color: [0.76, 0.62, 0.42, 1.0]
+  rpy: [0.0, 0.0, -1.5708]
+- name: Porte_b2fdef86_frame_02
+  type: box
+  size: [0.9, 0.844, 0.06]
+  pose: [0.5614, -1.643, -0.8841]
+  color: [0.76, 0.62, 0.42, 1.0]
+  rpy: [0.0, 0.0, -1.5708]
+- name: Porte_b2fdef86_frame_03
+  type: box
+  size: [0.9, 0.844, 0.06]
+  pose: [0.5614, -1.643, 1.1559]
+  color: [0.76, 0.62, 0.42, 1.0]
+  rpy: [0.0, 0.0, -1.5708]
+- name: Poutre_item_4551b341_box
+  type: box
+  size: [0.22, 4.6, 0.3]
+  pose: [-1.3764, -0.3593, 0.9859]
+  color: [0.55, 0.4, 0.25, 1.0]
+  rpy: [0.0, 0.0, -1.62316]
+- name: Meuble_de_cuisine_item_807bb075_box
+  type: box
+  size: [2.45, 0.61, 0.905]
+  pose: [-0.3246, 0.9653, -0.4616]
+  color: [0.86, 0.73, 0.56, 1.0]
+- name: Meuble_de_cuisine_a2e2b013_box
+  type: box
+  size: [1.835, 0.61, 0.905]
+  pose: [0.5954, 0.3528, -0.4616]
+  color: [0.86, 0.73, 0.56, 1.0]
+  rpy: [0.0, 0.0, 1.5708]
+- name: R_frig_rateur_Cong_lateur_d2214132_box
+  type: box
+  size: [0.55, 0.56, 1.41]
+  pose: [0.6204, -0.8397, -0.2091]
+  color: [0.82, 0.84, 0.86, 1.0]
+  rpy: [0.0, 0.0, -1.5708]
+- name: Meuble_de_cuisine_fd9ab6b3_box
+  type: box
+  size: [0.615, 0.61, 2.11]
+  pose: [-1.8571, 0.9653, 0.1409]
+  color: [0.86, 0.73, 0.56, 1.0]
+- name: Meuble_de_cuisine_e819cb89_box
+  type: box
+  size: [1.85, 0.41, 0.46]
+  pose: [-0.6246, 1.0653, 0.9659]
+  color: [0.86, 0.73, 0.56, 1.0]
+- name: Meuble_de_cuisine_item_60aa0e8f_box
+  type: box
+  size: [0.35, 0.44, 0.75]
+  pose: [0.5849, 0.9154, 0.8209]
+  color: [0.86, 0.73, 0.56, 1.0]
+  rpy: [0.0, 0.0, -4.01426]
+- name: Meuble_de_cuisine_b7e74cf9_box
+  type: box
+  size: [0.63, 0.37, 0.75]
+  pose: [0.7154, 0.9553, 0.8209]
+  color: [0.86, 0.73, 0.56, 1.0]
+  rpy: [0.0, 0.0, -1.5708]
+- name: Meuble_de_cuisine_item_9599a9ea_box
+  type: box
+  size: [0.6, 0.36, 0.75]
+  pose: [0.6004, 1.0903, 0.8209]
+  color: [0.86, 0.73, 0.56, 1.0]
+- name: Hotte_a7fc4696_box
+  type: box
+  size: [0.6, 0.48, 0.99]
+  pose: [0.6604, 0.3483, 1.2209]
+  color: [0.75, 0.77, 0.8, 1.0]
+  rpy: [0.0, 0.0, -1.5708]
+- name: item_1_md_schock_lithos_d200_3dmodel_3ds_b562444
+  type: box
+  size: [1.16, 0.055, 0.035]
+  pose: [-0.5479, 1.192, -0.0106]
+  color: [0.72, 0.73, 0.75, 1.0]
+  rpy: [0.0, 0.0, -3.14159]
+- name: item_1_md_schock_lithos_d200_3dmodel_3ds_b562444_2
+  type: box
+  size: [1.16, 0.055, 0.035]
+  pose: [-0.5479, 0.747, -0.0106]
+  color: [0.72, 0.73, 0.75, 1.0]
+  rpy: [0.0, 0.0, -3.14159]
+- name: item_1_md_schock_lithos_d200_3dmodel_3ds_b562444_3
+  type: box
+  size: [0.055, 0.5, 0.035]
+  pose: [0.0046, 0.9695, -0.0106]
+  color: [0.72, 0.73, 0.75, 1.0]
+  rpy: [0.0, 0.0, -3.14159]
+- name: item_1_md_schock_lithos_d200_3dmodel_3ds_b562444_4
+  type: box
+  size: [0.055, 0.5, 0.035]
+  pose: [-1.1004, 0.9695, -0.0106]
+  color: [0.72, 0.73, 0.75, 1.0]
+  rpy: [0.0, 0.0, -3.14159]
+- name: item_1_md_schock_lithos_d200_3dmodel_3ds_b562444_5
+  type: box
+  size: [1.05, 0.39, 0.025]
+  pose: [-0.5479, 0.9695, -0.2166]
+  color: [0.72, 0.73, 0.75, 1.0]
+  rpy: [0.0, 0.0, -3.14159]
+- name: Brandt_TI612BT1_SH3D_OBJ_download_bc73d0e3_box
+  type: box
+  size: [0.58, 0.51, 0.064]
+  pose: [0.5911, 0.3585, -0.0371]
+  color: [0.14, 0.14, 0.14, 1.0]
+  rpy: [0.0, 0.0, -1.5708]
+- name: Micro_onde_item_8301ea1c_box
+  type: box
+  size: [0.439, 0.372, 0.258]
+  pose: [0.5988, 0.9835, 0.1199]
+  color: [0.94, 0.94, 0.94, 1.0]
+  rpy: [0.0, 0.0, -0.7854]
+- name: Four_item_990e6f37_box
+  type: box
+  size: [0.592, 0.579, 0.592]
+  pose: [0.5538, 0.3533, -0.3381]
+  color: [0.18, 0.18, 0.18, 1.0]
+  rpy: [0.0, 0.0, -1.5708]
+- name: credence_185x41x3mm_package_item_6feb6b3c_box
+  type: box
+  size: [1.85, 0.01, 0.41]
+  pose: [0.895, 0.3453, 0.1909]
+  color: [0.85, 0.85, 0.85, 1.0]
+  rpy: [0.0, 0.0, -1.5708]
+- name: credence_245x41x3mm_package_b6b52e2b_box
+  type: box
+  size: [2.45, 0.01, 0.41]
+  pose: [-0.3246, 1.2609, 0.1909]
+  color: [0.85, 0.85, 0.85, 1.0]
+- name: Table_sous_robot_item_2748c320_Pied_1_00
+  type: box
+  size: [0.03, 0.07, 0.6785]
+  pose: [-0.3654, -0.7007, -0.5749]
+  color: [0.9, 0.76, 0.43, 1.0]
+- name: Table_sous_robot_item_2748c320_Pied_01
+  type: box
+  size: [0.03, 0.07, 0.6785]
+  pose: [0.1446, -0.7007, -0.5749]
+  color: [0.9, 0.76, 0.43, 1.0]
+- name: Table_sous_robot_item_2748c320_Pied_2_02
+  type: box
+  size: [0.03, 0.07, 0.6785]
+  pose: [-0.3654, 0.4193, -0.5749]
+  color: [0.9, 0.76, 0.43, 1.0]
+- name: Table_sous_robot_item_2748c320_Pied_3_03
+  type: box
+  size: [0.03, 0.07, 0.6785]
+  pose: [0.1446, 0.4193, -0.5749]
+  color: [0.9, 0.76, 0.43, 1.0]
+- name: Table_sous_robot_item_2748c320_Plateau_04
+  type: box
+  size: [0.6, 1.4, 0.0565]
+  pose: [-0.1104, -0.1407, -0.2074]
+  color: [0.9, 0.76, 0.43, 1.0]
+- name: etagere_metal_optimisee_sweethome3d_c84e46c5_box
+  type: box
+  size: [0.8, 0.27, 0.233]
+  pose: [-1.149, 1.1244, 0.4024]
+  color: [0.68, 0.7, 0.72, 1.0]
+- name: Architecture_Floor
+  type: box
+  size: [3.362, 4.6104, 0.03]
+  pose: [-1.4048, -0.4107, -0.9291]
+  color: [0.78, 0.74, 0.68, 1.0]
+  rpy: [0.0, 0.0, -1.5708]

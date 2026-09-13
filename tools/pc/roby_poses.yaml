@@ -1,8 +1,50 @@
+# RECALAGE DU NID (2026-09-06) : la pose du nid a ete re-etiquetee
+#   joint_2 -0.0904 rad (-5.18 deg) | joint_3 +0.0597 (+3.42) | joint_5 -0.0242 (-1.39)
+# Seules les poses liees au NID sont recalees (nid, approche_nid, sortie et les
+# waypoints de sortie). changeur_outil, approche_changeur et D_pose_cone gardent
+# l'ANCIENNE convention : elles ont ete validees physiquement par demonstration.
+# ⚠️ DEUX CONVENTIONS COEXISTENT donc dans ce fichier — c'est un choix assume.
 # Bibliothèque de poses pour roby_moveit_seq.py  (nom: [j1,j2,j3,j4,j5] en radians)
 # Capture des poses avec l'outil de jog (bouton Capturer) -> elles s'ajoutent ici.
-nid: [1.5627, 1.0083, 0.3923, 0.0000, 0.2251]
 changeur_outil: [-0.5098, 0.9257, 0.5103, 0.0000, 0.2251]
 D_pose_cone: [0.5649, 1.2491, -0.5935, -0.0557, 1.0070]   # tcp_world_m=[0.6790, 0.4220, -0.0280] (2026-07-11, prise top-down)
 approche_changeur: [-0.5098, 0.6772, 0.5720, -0.0000, 0.4118]
-approche_nid: [1.5627, 0.7748, 0.4651, 0.0000, 0.3858]
-sortie: [0.6920, 0.5238, 0.4447, 0.0000, 0.2251]   # fin trajectoire sortie du nid (ajout 2026-07-17)
+approche_nid: [1.5627, 0.6844, 0.5248, 0.0000, 0.3616]
+sortie: [0.6920, 0.4334, 0.5044, 0.0000, 0.2009]   # fin trajectoire sortie du nid (ajout 2026-07-17)
+# Position de depose CUISINE (2026-09-06, demande Sam : "en haut de la zone, avec une marge").
+# Bord X max de la zone cuisine (X +0.34..+0.79) avec 6 cm de marge, centre en Y.
+# Cible cartesienne x=0.730 y=-0.230 z=0.2551 (Z_PICK_CUISINE) ; IK grasp-azimut de
+# l'oracle (w_ori=0.5), erreur de suivi 2.9 mm, toutes butees OK.
+# NOTE : ce n'est PAS encore D_pose_cone. D (y=+0.43) est hors zone cuisine et reste a redefinir.
+depose_cuisine: [-0.2976, 0.9300, -0.4318, -0.0534, 1.1643]
+# Remontee de 8 cm au-dessus de depose_cuisine (2026-09-06) : a la hauteur calculee
+# Z_PICK_CUISINE=0.2551 la pince serait DANS le plan de travail (constat Sam sur le
+# vrai robot) => l'hypothese Z_SURFACE_CUISINE=-0.007 est fausse, a re-sonder.
+depose_cuisine_haut: [-0.2906, 0.8558, -0.4908, -0.0514, 1.2975]
+# D reel de la cuisine (2026-09-07) : pose LUE sur le robot apres le cycle verrou
+# ouvert 5 s / referme. C'est ce qui est ecrit dans roby_oracle.py comme D_JOINTS.
+# ⚠️ NE PAS confondre avec 'depose_cuisine' (ancienne, 8 cm trop basse, pince dans la table).
+D_cuisine: [-0.2991, 0.8560, -0.4835, -0.0492, 1.3045]
+# Coins ATTEIGNABLES de la zone, a hauteur de prise (verif visuelle 2026-09-07).
+coin_proche_droit: [-0.9376, 0.4542, 0.1736, -0.0512, 1.0492]   # x=+0.34 y=-0.46 r=0.572
+coin_loin_gauche:  [0.0049, 0.9265, -0.6092, -0.0489, 1.3597]   # x=+0.79 y= 0.00 r=0.790
+coin_loin_gauche_haut: [0.0068, 0.8968, -0.6716, -0.0483, 1.4517]   # 5 cm au-dessus du coin loin-gauche (arret de securite)
+# Coin proche-droit avec compensation joint_3 f=0.9299 (test 2026-09-07).
+# Attendu : pince a ~1 cm de la table au lieu des 3 cm mesures sans compensation.
+coin_proche_droit_comp: [-0.9376, 0.4542, 0.1472, -0.0512, 1.0492]
+# Hauteur de prise CORRIGEE (z=0.3016) + compensation joint_3 f=0.9299 (2026-09-07).
+coin_proche_droit_z3016_comp: [-0.9393, 0.4925, 0.1726, -0.0518, 0.9873]
+D_z3016_comp: [-0.3003, 0.8812, -0.5309, -0.0495, 1.2527]
+# Refuge : 18 cm au-dessus de D, DANS la zone, loin de la plaque de cuisson (2026-09-07).
+refuge_zone: [-0.2919, 0.7884, -0.7112, -0.0472, 1.5998]
+parking_zone: [-0.6652, 0.4608, -0.2929, -0.0476, 1.5092]   # parking haut, dans la zone, D degage
+# Repos AVANT run, recentre sur le plateau (demande Sam 2026-09-07). Remplace parking_zone.
+repos_centre: [-0.3778, 0.3916, -0.1859, -0.0478, 1.4713]
+# D corrige (outil redresse + offset 1.1cm) AVEC compensation joint_3 — 2026-09-07.
+D_final_comp: [-0.2984, 0.8410, -0.4541, -0.0073, 1.1153]
+D_haut15: [-0.2973, 0.7460, -0.6570, -0.0034, 1.3990]
+repos_centre_v: [-0.3722, 0.3753, -0.2294, -0.0032, 1.3721]
+# Depart INFERENCE : mediane des etats de debut d episode du dataset propre (2026-09-07),
+# compensation joint_3 incluse -> le modele lira bien l etat sur lequel il a ete entraine.
+depart_infer_comp: [-0.3696, 0.1732, -0.0578, 0.0062, 1.4090]
+nid: [1.5964, 0.8615, 0.5168, -0.0029, 0.1830]   # tcp_world_m=[-0.0118, 0.4642, -0.0649]

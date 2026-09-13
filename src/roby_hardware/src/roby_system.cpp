@@ -217,6 +217,26 @@ hardware_interface::CallbackReturn RobySystem::on_init(
       servo_index_[i] = static_cast<int>(servos_.size());
       servos_.push_back(std::move(servo));
 
+    } else if (type_str == "bldc") {
+      // Axe BLDC via le noeud roby_wrist_bldc (topics). La carte fait l'asservissement,
+      // le noeud la rampe et la securite ; ici on ne fait que relayer.
+      if (bldc_joint_ >= 0) {
+        RCLCPP_ERROR(rclcpp::get_logger("RobySystem"),
+          "%s : un seul joint bldc supporte (deja %s)", joint.name.c_str(),
+          joints_[bldc_joint_].name.c_str());
+        return hardware_interface::CallbackReturn::ERROR;
+      }
+      joints_[i].type = JointType::BLDC;
+      bldc_joint_ = static_cast<int>(i);
+      bldc_command_topic_ = get_param(joint.name + "_bldc_command_topic", bldc_command_topic_);
+      bldc_state_topic_ = get_param(joint.name + "_bldc_state_topic", bldc_state_topic_);
+      bldc_state_timeout_s_ = get_param_double(joint.name + "_bldc_state_timeout_s", 0.2);
+      bldc_wait_on_activate_s_ = get_param_double(joint.name + "_bldc_wait_on_activate_s", 16.0);
+      bldc_last_cmd_ = joints_[i].position;
+      RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
+        "%s : BLDC externe, consigne -> %s, mesure <- %s", joint.name.c_str(),
+        bldc_command_topic_.c_str(), bldc_state_topic_.c_str());
+
     } else {
       joints_[i].type = JointType::MOCK;
     }
@@ -321,8 +341,8 @@ hardware_interface::CallbackReturn RobySystem::on_init(
   }
 
   RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
-    "Initialized with %zu joints (%zu steppers, %zu servos, encoder %s)",
-    joints_.size(), steppers_.size(), servos_.size(),
+    "Initialized with %zu joints (%zu steppers, %zu servos, %d bldc, encoder %s)",
+    joints_.size(), steppers_.size(), servos_.size(), bldc_joint_ >= 0 ? 1 : 0,
     encoder_enabled_ ? "ENABLED" : "disabled");
 
   // Recap des joints en closed-loop (gains != 0). Si aucun => open-loop pur.
@@ -481,6 +501,15 @@ hardware_interface::CallbackReturn RobySystem::on_activate(
     gripper_cmd_deg_ = gripper_open_deg_;
     lock_target_deg_.store(kNoServoTarget);
     gripper_target_deg_.store(kNoServoTarget);
+    // Axe BLDC : mesure recue sur le meme noeud/thread que le tuning.
+    if (bldc_joint_ >= 0) {
+      bldc_meas_flags_.store(0);
+      bldc_state_sub_ = tuning_node_->create_subscription<std_msgs::msg::Float64MultiArray>(
+        bldc_state_topic_, 10,
+        std::bind(&RobySystem::on_bldc_state, this, std::placeholders::_1));
+      bldc_cmd_pub_ = tuning_node_->create_publisher<std_msgs::msg::Float64>(
+        bldc_command_topic_, 10);
+    }
     tuning_running_ = true;
     tuning_thread_ = std::thread([this]() {
       rclcpp::executors::SingleThreadedExecutor exec;
@@ -494,8 +523,97 @@ hardware_interface::CallbackReturn RobySystem::on_activate(
       "Reglage PID live actif : topic /roby/pid_gains [joint_n, kp, ki, kd, deadband]");
   }
 
+  // --- Axe BLDC : partir de la position MESUREE (aucun saut a l'activation) ---
+  // Le noeud roby_wrist_bldc recale la carte au nid a son lancement ; on attend
+  // sa premiere mesure valide (liaison + recale). A defaut, on part de
+  // initial_value (= pose du nid) et write() restera en open-loop jusqu'a ce que
+  // la mesure arrive (voir read()).
+  if (bldc_joint_ >= 0) {
+    auto & bj = joints_[bldc_joint_];
+    double meas = 0.0;
+    auto deadline = std::chrono::steady_clock::now() +
+      std::chrono::duration<double>(bldc_wait_on_activate_s_);
+    while (!bldc_feedback(meas) && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    bldc_feedback_ok_ = bldc_feedback(meas);
+    if (bldc_feedback_ok_) {
+      bj.position = meas;
+      RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
+        "%s : mesure BLDC recue, depart a %.4f rad", bj.name.c_str(), meas);
+    } else {
+      RCLCPP_WARN(rclcpp::get_logger("RobySystem"),
+        "%s : AUCUNE mesure BLDC valide en %.1f s (noeud wrist_bldc lance ? carte "
+        "branchee ? recalee ?) -> depart a initial_value %.4f, open-loop en attendant",
+        bj.name.c_str(), bldc_wait_on_activate_s_, bj.position);
+    }
+    bj.command = bj.position;
+    bj.prev_position = bj.position;
+    if (static_cast<size_t>(bldc_joint_) < prev_commands_.size()) {
+      prev_commands_[bldc_joint_] = bj.command;
+    }
+    bldc_last_cmd_ = bj.command;
+    bldc_cmd_.store(bj.command);
+    bldc_cmd_valid_.store(!dry_run_);  // dry-run : aucune consigne vers le moteur
+    bldc_pub_running_ = true;
+    bldc_pub_thread_ = std::thread(&RobySystem::bldc_publish_loop, this);
+  }
+
   RCLCPP_INFO(rclcpp::get_logger("RobySystem"), "Hardware activated");
   return hardware_interface::CallbackReturn::SUCCESS;
+}
+
+void RobySystem::on_bldc_state(const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+{
+  // [position, courant, flags] (roby_wrist_bldc/node.py). Position avant flags :
+  // read() ne lit la position que si les flags la declarent valide.
+  if (msg->data.size() < 3) {
+    return;
+  }
+  bldc_meas_pos_.store(msg->data[0]);
+  bldc_meas_flags_.store(static_cast<int>(msg->data[2]));
+  bldc_meas_stamp_ns_.store(std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+bool RobySystem::bldc_feedback(double & pos) const
+{
+  const int flags = bldc_meas_flags_.load();
+  if ((flags & kBldcLinkOk) == 0 || (flags & kBldcHomed) == 0) {
+    return false;  // pas de liaison, ou position dans un repere non recale
+  }
+  const int64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::steady_clock::now().time_since_epoch()).count();
+  const double age_s = static_cast<double>(now_ns - bldc_meas_stamp_ns_.load()) * 1e-9;
+  if (age_s > bldc_state_timeout_s_) {
+    return false;  // noeud mort ou bloque
+  }
+  const double p = bldc_meas_pos_.load();
+  if (!std::isfinite(p)) {
+    return false;
+  }
+  pos = p;
+  return true;
+}
+
+void RobySystem::bldc_publish_loop()
+{
+  // 100 Hz, hors thread RT : write() ne fait que poser bldc_cmd_.
+  const auto period = std::chrono::milliseconds(10);
+  auto next = std::chrono::steady_clock::now();
+  std_msgs::msg::Float64 msg;
+  while (bldc_pub_running_) {
+    next += period;
+    std::this_thread::sleep_until(next);
+    const auto now = std::chrono::steady_clock::now();
+    if (now - next > 5 * period) {
+      next = now;  // gros retard : pas de rafale de rattrapage
+    }
+    if (bldc_cmd_valid_.load() && bldc_cmd_pub_) {
+      msg.data = bldc_cmd_.load();
+      bldc_cmd_pub_->publish(msg);
+    }
+  }
 }
 
 void RobySystem::on_pid_gains(const std_msgs::msg::Float64MultiArray::SharedPtr msg)
@@ -569,21 +687,62 @@ void RobySystem::on_gripper_deg(const std_msgs::msg::Float64::SharedPtr msg)
   RCLCPP_INFO(rclcpp::get_logger("RobySystem"), "/roby/gripper_deg -> %.1f deg", a);
 }
 
+void RobySystem::stop_background_threads()
+{
+  // Idempotent, et joint un fil meme s'il s'est termine seul : un std::thread encore
+  // joignable a sa destruction appelle std::terminate.
+
+  // Axe BLDC : plus de consigne publiee => le noeud wrist_bldc detecte le
+  // silence et s'arrete sur rampe ; la carte tient la position (moteur asservi).
+  bldc_pub_running_ = false;
+  if (bldc_pub_thread_.joinable()) {
+    bldc_pub_thread_.join();
+  }
+  bldc_cmd_valid_.store(false);
+
+  // Stop le thread de reglage PID live (executeur des abonnements)
+  tuning_running_ = false;
+  if (tuning_thread_.joinable()) {
+    tuning_thread_.join();
+  }
+  pid_sub_.reset();
+  head_lock_sub_.reset();
+  gripper_sub_.reset();
+  gripper_deg_sub_.reset();
+  bldc_state_sub_.reset();
+  bldc_cmd_pub_.reset();
+  tuning_node_.reset();
+}
+
+// Chemin d'ERREUR (watchdog d'ecart : write() rend ERROR) : le composant part en
+// FINALIZED sans passer par on_deactivate. Avant le 2026-09-13, le fil BLDC continuait
+// alors de publier la derniere consigne a 100 Hz -- le noeud wrist_bldc ne voyait jamais
+// le silence qui l'arrete sur rampe -- et les fils encore joignables provoquaient
+// std::terminate a la sortie du processus. On arrete les FILS ; les pilotes des moteurs
+// ne sont PAS coupes ici (couper les steppers pourrait laisser tomber le bras).
+hardware_interface::CallbackReturn RobySystem::on_error(
+  const rclcpp_lifecycle::State & previous_state)
+{
+  stop_background_threads();
+  return hardware_interface::SystemInterface::on_error(previous_state);
+}
+
+hardware_interface::CallbackReturn RobySystem::on_shutdown(
+  const rclcpp_lifecycle::State & previous_state)
+{
+  stop_background_threads();
+  return hardware_interface::SystemInterface::on_shutdown(previous_state);
+}
+
+RobySystem::~RobySystem()
+{
+  stop_background_threads();
+}
+
 hardware_interface::CallbackReturn RobySystem::on_deactivate(
   const rclcpp_lifecycle::State & /*previous_state*/)
 {
-  // Stop le thread de reglage PID live
-  if (tuning_running_) {
-    tuning_running_ = false;
-    if (tuning_thread_.joinable()) {
-      tuning_thread_.join();
-    }
-    pid_sub_.reset();
-    head_lock_sub_.reset();
-    gripper_sub_.reset();
-    gripper_deg_sub_.reset();
-    tuning_node_.reset();
-  }
+  stop_background_threads();
 
   // Shutdown all drivers
   for (auto & s : steppers_) {
@@ -669,6 +828,26 @@ hardware_interface::return_type RobySystem::read(
       double angle_deg = servos_[servo_index_[i]]->get_angle_deg();
       joints_[i].position =
         ServoDriver::deg_to_rad(angle_deg - joints_[i].servo_offset_deg);
+    } else if (joints_[i].type == JointType::BLDC) {
+      // Mesure reelle de la carte (codeur AS5600, repere recale au nid). Sans
+      // mesure valide : position = derniere consigne (posee par write()), comme
+      // un joint mock, et on le signale une fois par transition.
+      double meas = 0.0;
+      const bool ok = bldc_feedback(meas);
+      if (ok) {
+        joints_[i].position = meas;
+      }
+      if (ok != bldc_feedback_ok_) {
+        bldc_feedback_ok_ = ok;
+        if (ok) {
+          RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
+            "%s : mesure BLDC retablie (%.4f rad)", joints_[i].name.c_str(), meas);
+        } else {
+          RCLCPP_WARN(rclcpp::get_logger("RobySystem"),
+            "%s : mesure BLDC PERDUE (noeud, liaison ou recalage) -> position = consigne",
+            joints_[i].name.c_str());
+        }
+      }
     }
     // MOCK joints: position = command (set in write)
 
@@ -782,7 +961,10 @@ hardware_interface::return_type RobySystem::write(
   // (the controller continuously writes to joints_[i].command)
   bool any_command_active = false;
   for (size_t i = 0; i < joints_.size(); ++i) {
-    if (std::abs(joints_[i].command - joints_[i].position) > 1e-6) {
+    // BLDC : comparer a la derniere consigne envoyee, pas a la mesure (toujours
+    // un peu differente => le watchdog se croirait sans cesse sollicite).
+    const double ref = (joints_[i].type == JointType::BLDC) ? bldc_last_cmd_ : joints_[i].position;
+    if (std::abs(joints_[i].command - ref) > 1e-6) {
       any_command_active = true;
       break;
     }
@@ -881,6 +1063,8 @@ hardware_interface::return_type RobySystem::write(
     double current_for_clamp = joints_[i].position;
     if (joints_[i].type == JointType::STEPPER && stepper_index_[i] >= 0) {
       current_for_clamp = steppers_[stepper_index_[i]]->get_position_rad();
+    } else if (joints_[i].type == JointType::BLDC) {
+      current_for_clamp = bldc_last_cmd_;  // meme raison : pas de boucle sur la mesure
     }
     cmd = safety_.clamp_command(i, current_for_clamp, cmd);
 
@@ -903,6 +1087,15 @@ hardware_interface::return_type RobySystem::write(
     } else if (joints_[i].type == JointType::SERVO && servo_index_[i] >= 0) {
       double angle_deg = joints_[i].servo_offset_deg + ServoDriver::rad_to_deg(cmd);
       if (!dry_run_) servos_[servo_index_[i]]->set_angle_deg(angle_deg);
+
+    } else if (joints_[i].type == JointType::BLDC) {
+      // Pose la consigne ; bldc_publish_loop() la publie (hors thread RT). Le
+      // noeud wrist_bldc applique rampe, butees et securite avant la carte.
+      bldc_last_cmd_ = cmd;
+      if (!dry_run_) bldc_cmd_.store(cmd);
+      if (!bldc_feedback_ok_) {
+        joints_[i].position = cmd;  // pas de mesure : open-loop comme un mock
+      }
 
     } else {
       // MOCK: directly set position
@@ -983,7 +1176,11 @@ hardware_interface::return_type RobySystem::write(
     // (inverse-couplage applique a la lecture). actual est donc TOUJOURS en
     // espace-joint => on compare a la commande brute, SANS recompenser, sinon
     // fausse deviation = terme de couplage (~21 deg) => coupure parasite.
-    commanded.push_back(joints_[i].command);
+    // BLDC exclu : la carte (watchdog blocage) et le noeud (ecart de suivi)
+    // le surveillent deja ; apres un defaut, l'ecart consigne/mesure est normal
+    // et ne doit pas desactiver TOUT le bras.
+    commanded.push_back(
+      joints_[i].type == JointType::BLDC ? joints_[i].position : joints_[i].command);
   }
   // Watchdog deviation : UNIQUEMENT en boucle fermee (encodeur). En open-loop,
   // actual=compteur de pas qui rattrape toujours la consigne avec du RETARD

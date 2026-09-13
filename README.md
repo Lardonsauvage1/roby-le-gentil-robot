@@ -1,56 +1,73 @@
 # Roby le gentil robot
 
-Bras robotique 5 axes DIY pour imitation learning (behavioral cloning) avec ROS2 Jazzy et MoveIt2.
+Bras robotique 5 axes DIY pour l'apprentissage par imitation (Diffusion Policy, LeRobot),
+piloté par ROS 2 Jazzy, ros2_control et MoveIt 2. État du dépôt au 2026-09-13.
 
-## Architecture
+## Architecture (« B », deux machines)
 
-Le projet est distribué sur 3 machines :
+| Machine | Rôle | Réseau |
+|---|---|---|
+| **Pi5** (`roby-desktop`) | temps réel : `ros2_control` (`RobySystem`, 100 Hz), `robot_state_publisher`, caméras de la tête | `192.168.2.37` |
+| **PC** (`sam-AtomMan`) | MoveIt `move_group` + RViz, scène de collision, garde, inférence (iGPU, OpenVINO), bras guide, outils | `192.168.2.95` |
 
-| Machine | Rôle | IP |
-|---------|------|----|
-| **PC** (sam-AtomMan) | Planification MoveIt, RViz, simulation, entraînement | 192.168.1.95 |
-| **Pi5** (roby-arm) | Contrôle moteurs (steppers + servos) | 192.168.1.37 |
-| **Pi4** (roby-cam) | Vision caméra + ArUco tracking | 192.168.1.28 |
+CycloneDDS des deux côtés, `ROS_DOMAIN_ID=42`, réseau dédié `192.168.2.x`.
+Reconstruire une machine : [`deploy/pi5/README.md`](deploy/pi5/README.md),
+[`deploy/pc/README.md`](deploy/pc/README.md).
 
-## Packages ROS2
+## Contenu du dépôt
 
-| Package | Description |
-|---------|-------------|
-| `neuroneimitationcarote_description` | URDF/Xacro du bras + meshes STL |
-| `neuroneimitationcarote_moveit_config` | Configuration MoveIt2 (planification, controllers, RViz) |
+| Chemin | Contenu |
+|---|---|
+| `src/neuroneimitationcarote_description` | URDF/xacro du bras + maillages STL (« Roby » dans la doc, `neuroneimitationcarote` dans le code) |
+| `src/neuroneimitationcarote_moveit_config` | configuration MoveIt 2 ; `pc_moveit.launch.py` = côté PC de l'architecture B |
+| `src/roby_hardware` | plugin C++ ros2_control `RobySystem` : steppers en GPIO (axes 1-3), servos PCA9685 (axes 4-5, verrou de tête, pince), joint BLDC optionnel (`wrist:=bldc`) ; `robot_control.launch.py` = côté Pi5 |
+| `src/roby_environments` | scènes de collision MoveIt (`cuisine`, 35 obstacles ; `atelier_actuel`) |
+| `src/roby_control` | bras guide SO-ARM 101 (`leader_node`, correspondance, joystick) et téléopérations : bras **simulé** (`leader_teleop_sim`, `_pos`, `_cart`) et **vrai** bras via le garde (`leader_teleop_reel`) ; nœuds ArUco / suivi visuel (non modifiés depuis juin 2026) |
+| `src/roby_wrist_bldc` | poignet axe 5 BLDC (carte B-G431B-ESC1 + SimpleFOC) : driver série, nœud ROS, pont vers `RobySystem` — **pas encore monté sur le robot** |
+| `firmware/wrist_bldc_simplefoc` | firmware PlatformIO de la carte du poignet BLDC |
+| `tools/pc`, `tools/pi5` | outillage opérationnel de chaque machine, appelé par des liens depuis le home — voir [`tools/README.md`](tools/README.md) |
+| `deploy/` | ce qu'il faut sur chaque machine en dehors du workspace (DDS, système, udev…) |
+| `demo/`, `hot_reload_urdf.py` | démonstration de juin 2026 et outil de mise au point de l'URDF : historiques |
+| `launch_sim.sh` | MoveIt seul avec un robot simulé (`demo.launch.py`), sur le domaine **43** |
 
-## Lancer la simulation
+## Lancer le vrai bras
+
+La procédure fait foi : skill **`/roby-lancer-bras`** du dépôt
+[`roby-specs`](https://github.com/Lardonsauvage1/roby-specs) (nettoyage des processus,
+stack Pi5, vérifications, MoveIt côté PC, scène de collision, sortie du nid). En résumé :
 
 ```bash
-# Prérequis : ROS2 Jazzy + MoveIt2 installés
-cd ~/ros2_ws
-colcon build --symlink-install
-./launch_sim.sh
+# Pi5, tete posee dans le nid
+ros2 launch roby_hardware robot_control.launch.py          # wrist:=bldc : poignet BLDC
+bash ~/launch_cams.sh
+# PC
+ros2 launch neuroneimitationcarote_moveit_config pc_moveit.launch.py
+ros2 run roby_environments scene_loader --env cuisine
 ```
 
-Dans RViz :
-- Déplacer les **marqueurs orange** pour choisir la pose cible
-- Panneau **MotionPlanning** > **Planning** > **Plan & Execute**
+`robot_full.launch.py` est **obsolète** (move_group sur le Pi5, course « mock »).
 
-### Trajectoire en boucle (test)
+## Règles de sécurité
 
-```bash
-# Dans un 2e terminal
-source /opt/ros/jazzy/setup.bash
-source ~/ros2_ws/install/setup.bash
-export ROS_DOMAIN_ID=42
-python3 src/neuroneimitationcarote_moveit_config/scripts/loop_trajectory.py
-```
+- **Aucun mouvement des moteurs sans le feu vert explicite de Sam.**
+- Tête posée **dans le nid** avant de lancer la stack : la référence est en boucle ouverte.
+- **Un seul** publisher de `/joint_states` et de `/robot_description` : ceux du Pi5
+  (BUG-008). Toute simulation se fait sur un autre domaine (`ROS_DOMAIN_ID=43`).
+- Scène de collision **chargée** avant tout mouvement planifié ou gardé.
+- Tout producteur d'angles (modèle IA, téléopération du vrai bras) passe par le **garde**
+  (`tools/pc/roby_guard.py`, `/guard/joint_trajectory`) : butées, vitesse, plancher,
+  collision MoveIt. Le jog fin (`roby_fine_jog`) envoie directement à `arm_controller`.
 
-## Stack technique
+## Tests (sans matériel)
 
-- **ROS2** Jazzy Jalisco
-- **MoveIt2** (OMPL/RRTConnect, CHOMP, Pilz, STOMP)
-- **ros2_control** avec mock_components (simulation) / gpiod + PCA9685 (hardware)
-- **DDS** : CycloneDDS (PC + Pi5), FastDDS (Pi4)
-- **Apprentissage** : LeRobot (behavioral cloning, CNN+MLP ResNet18) — futur
+Voir [`deploy/pc/README.md`](deploy/pc/README.md#tests-sans-matériel) : `roby_control`
+(bras guide, téléopération, 97 tests), `roby_wrist_bldc` (67 tests, carte simulée), pont
+BLDC de `roby_hardware` (3 tests) et gtests de `roby_hardware` (66 tests).
 
-## Repo lié
+## Dépôts liés
 
-Les spécifications, user stories et suivi de bugs sont dans un repo séparé :
-[roby-specs](https://github.com/Lardonsauvage1/roby-specs)
+- [`roby-specs`](https://github.com/Lardonsauvage1/roby-specs) : spécifications, user
+  stories, ADR, bugs et procédures (`/roby-*`).
+- `lerobot-experiments` : entraînement et évaluation des modèles (LeRobot).
+- `NIC_forge` (organisation) : expériences (EXP) et décisions, qui citent ce dépôt par
+  commit et empreinte.

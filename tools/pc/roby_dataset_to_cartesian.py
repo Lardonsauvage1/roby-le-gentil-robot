@@ -23,6 +23,30 @@ from std_msgs.msg import Float64MultiArray
 
 J = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
 
+# --- DE-COMPENSATION de joint_3 (2026-09-07) ---------------------------------
+# Depuis que la compensation d'echelle de joint_3 est active a la collecte
+# (ROBY_J3_SCALE, cf. NOTES_echelle_joint3.md), /joint_states contient la consigne
+# COMPENSEE, pas la position du modele. Appliquer la FK telle quelle donne donc un
+# cartesien FAUX, biaise d'autant plus que joint_3 s'eloigne de sa valeur au nid.
+#
+# La position physique reelle vaut  J3_REF + J3_SCALE * (lu - J3_REF).
+# On la retablit AVANT la FK. Sans argument, la de-compensation est DESACTIVEE :
+# les bags enregistres avant l'activation de la compensation (juillet) ne doivent
+# PAS etre touches.
+#   --j3-scale 0.9299     active la de-compensation
+#   --j3-ref 0.5237       ancre (joint_3 au nid), defaut
+J3_SCALE = 0.0
+J3_REF = 0.5237
+
+
+def decompense(q):
+    """Consigne enregistree -> position modele. Identite si --j3-scale absent."""
+    if J3_SCALE <= 0:
+        return q
+    out = list(q)
+    out[2] = J3_REF + J3_SCALE * (out[2] - J3_REF)
+    return out
+
 
 def convert_episode(src_ep, dst_ep):
     reader = rosbag2_py.SequentialReader()
@@ -51,7 +75,7 @@ def convert_episode(src_ep, dst_ep):
             js = deserialize_message(data, JointState)
             d = dict(zip(js.name, js.position))
             if all(j in d for j in J):
-                q = [float(d[j]) for j in J]
+                q = decompense([float(d[j]) for j in J])
                 T = fkT(q); p = T[:3, 3]; rv = rotvec(T[:3, :3])
                 msg = Float64MultiArray()
                 msg.data = [float(p[0]), float(p[1]), float(p[2]),
@@ -68,7 +92,17 @@ def convert_episode(src_ep, dst_ep):
 
 
 def main():
+    global J3_SCALE, J3_REF
     args = sys.argv[1:]
+    for flag, name in (("--j3-scale", "J3_SCALE"), ("--j3-ref", "J3_REF")):
+        if flag in args:
+            i = args.index(flag)
+            globals()[name] = float(args[i + 1])
+            del args[i:i + 2]
+    if J3_SCALE > 0:
+        print("de-compensation joint_3 ACTIVE : scale=%.4f ref=%.4f" % (J3_SCALE, J3_REF))
+    else:
+        print("de-compensation joint_3 desactivee (bags anterieurs a la compensation)")
     sync = "--sync" in args
     if sync:
         args.remove("--sync")

@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""Convertit les enregistrements mcap (rosbag2) du robot en dataset LeRobot v3.
+
+Cible : dataset CARTESIEN pour la boucle HG-DAgger (cf HANDOFF_ATOMMAN_HGDAGGER.md).
+
+  obs(t)    = image (3,R,R) + state
+  state     = /tcp_pose 6D [x,y,z,rvx,rvy,rvz]   (--state cart, defaut)
+              ou /joint_states 5D                (--state joint)
+  action(t) = state(t+1) + gripper(t)            -> 7D en cartesien, 6D en joint
+
+Le topic /gripper est EVENEMENTIEL (3 msgs/episode) : on maintient la derniere
+valeur (hold) pour obtenir une cible dense.
+
+IMPORTANT : necessite ROS source ET le venv lerobot dans le meme interpreteur.
+Utiliser le wrapper roby_bag_to_lerobot.sh, qui s'en charge.
+
+Exemple :
+  ~/roby_bag_to_lerobot.sh \
+    --batch ~/roby_datasets/batch_collect_20260716_023632_cart \
+    --batch ~/roby_datasets/batch_recovery_20260722_175404_cart \
+    --batch ~/roby_datasets/batch_recovery_far_20260722_183001_cart \
+    --out ~/lerobot-experiments/data_cache/lerobot_apple_cart_128 \
+    --repo-id local/apple_cart_128
+"""
+import argparse
+import bisect
+import sys
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+T_JOINTS = "/joint_states"
+T_TCP = "/tcp_pose"
+T_GRIP = "/gripper"
+T_CAM = {
+    "left": "/head_camera/left/image_raw/compressed",
+    "right": "/head_camera/right/image_raw/compressed",
+}
+
+
+def read_episode(ep_dir, topics):
+    """Lit un bag mcap et renvoie {topic: (ts_array, [messages])}, tries par ts."""
+    import rosbag2_py
+    from rclpy.serialization import deserialize_message
+    from sensor_msgs.msg import CompressedImage, JointState
+    from std_msgs.msg import Bool, Float64MultiArray
+
+    TYPES = {
+        T_JOINTS: JointState,
+        T_TCP: Float64MultiArray,
+        T_GRIP: Bool,
+        T_CAM["left"]: CompressedImage,
+        T_CAM["right"]: CompressedImage,
+    }
+
+    reader = rosbag2_py.SequentialReader()
+    reader.open(
+        rosbag2_py.StorageOptions(uri=str(ep_dir), storage_id="mcap"),
+        rosbag2_py.ConverterOptions("cdr", "cdr"),
+    )
+    out = {t: ([], []) for t in topics}
+    while reader.has_next():
+        topic, data, ts = reader.read_next()
+        if topic not in out:
+            continue
+        out[topic][0].append(ts)
+        out[topic][1].append(deserialize_message(data, TYPES[topic]))
+    return {t: (np.array(ts, dtype=np.int64), msgs) for t, (ts, msgs) in out.items()}
+
+
+def nearest_idx(ts_arr, t):
+    """Index du timestamp le plus proche de t."""
+    i = bisect.bisect_left(ts_arr, t)
+    if i == 0:
+        return 0
+    if i >= len(ts_arr):
+        return len(ts_arr) - 1
+    return i if (ts_arr[i] - t) < (t - ts_arr[i - 1]) else i - 1
+
+
+def hold_idx(ts_arr, t):
+    """Index du dernier message a ts <= t (semantique 'hold'). -1 si aucun."""
+    return bisect.bisect_right(ts_arr, t) - 1
+
+
+def decode_img(msg, res):
+    """JPEG compresse -> uint8 CHW RGB redimensionne."""
+    buf = np.frombuffer(msg.data, dtype=np.uint8)
+    img = cv2.imdecode(buf, cv2.IMREAD_COLOR)  # BGR HWC
+    if img is None:
+        return None
+    if img.shape[0] != res or img.shape[1] != res:
+        img = cv2.resize(img, (res, res), interpolation=cv2.INTER_AREA)
+    return np.transpose(img[:, :, ::-1], (2, 0, 1)).copy()  # RGB CHW
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--batch", action="append", required=True, help="dossier de batch (repetable)")
+    p.add_argument("--out", required=True, help="racine du dataset LeRobot a creer")
+    p.add_argument("--repo-id", default="local/apple_cart_128")
+    p.add_argument("--fps", type=int, default=15)
+    p.add_argument("--res", type=int, default=128)
+    p.add_argument("--cam", default="left", choices=["left", "right", "both"],
+                   help="'both' = les DEUX cameras comme deux entrees image, echantillonnees "
+                        "au MEME tick. Desync mesuree le 2026-09-07 : 11-17 ms mediane, "
+                        "soit un quart de periode a 15 Hz (elles ne sont pas declenchees "
+                        "ensemble : deux threads du meme process).")
+    p.add_argument("--img-key", default=None,
+                   help="nom de la feature image. Defaut 'fixed' = compatible avec les modeles "
+                        "deployes (observation.images.fixed) et roby_infer_cart.py")
+    p.add_argument("--state", default="cart", choices=["cart", "joint"])
+    p.add_argument("--state-gripper", action="store_true",
+                   help="ajoute l'etat de la PINCE a observation.state (6D -> 7D). "
+                        "Sans lui le modele ne sait pas s'il tient l'objet : descendre "
+                        "vers l'objet et remonter avec sont indiscernables pour lui. "
+                        "ATTENTION : active aussi le decalage de l'action (cf plus bas).")
+    p.add_argument("--trim-static", type=float, default=0.0, metavar="SEUIL",
+                   help="rogne les frames IMMOBILES en TETE et en QUEUE d'episode "
+                        "(seuil en rad sur le max des 5 articulations entre 2 ticks ; "
+                        "0 = pas de rognage). Les pauses du MILIEU sont conservees : "
+                        "la pince y change d'etat, c'est une action a apprendre.")
+    p.add_argument("--task", default="pick_apple")
+    p.add_argument("--vcodec", default="h264", help="h264 (decodage rapide) vs libsvtav1 (defaut LeRobot, lent)")
+    p.add_argument("--images-brutes", action="store_true",
+                   help="stocke les IMAGES au lieu d une video. RECOMMANDE : le h264 en CRF 30 "
+                        "sur du 128x128 quantifie le mouvement inter-images jusqu a le SUPPRIMER "
+                        "(mesure 2026-07-28 : 20 paires consecutives identiques sur 40, contre 0 "
+                        "en AV1) -> avec n_obs_steps=2 le reseau ne voit plus aucun mouvement. "
+                        "N AFFECTE NI la resolution NI le CNN : memes pixels, meme (3,128,128).")
+    p.add_argument("--limit", type=int, default=0, help="n'traiter que les N premiers episodes (test)")
+    p.add_argument("--robot-type", default="real5dof")
+    a = p.parse_args()
+
+    cams = ["right", "left"] if a.cam == "both" else [a.cam]
+    cam_topics = [T_CAM[c] for c in cams]
+    cam_topic = cam_topics[0]          # camera de reference pour la fenetre temporelle
+    state_topic = T_TCP if a.state == "cart" else T_JOINTS
+    topics = cam_topics + [state_topic, T_GRIP]
+
+    if a.state == "cart":
+        pose_names = ["x", "y", "z", "rvx", "rvy", "rvz"]
+    else:
+        pose_names = [f"joint_{i}" for i in range(1, 6)]
+    pdim = len(pose_names)
+    state_names = pose_names + (["gripper"] if a.state_gripper else [])
+    sdim = len(state_names)
+
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    # Nommage : en mono on garde 'fixed' (compatible avec les modeles existants) ;
+    # en bi-camera chaque vue porte son nom, 'fixed' restant l'EXTERIEURE (right).
+    if a.cam == "both":
+        img_keys = {"right": "observation.images.fixed",
+                    "left": "observation.images.wrist"}
+    else:
+        img_keys = {a.cam: f"observation.images.{a.img_key or 'fixed'}"}
+    img_key = img_keys[cams[0]]
+    features = {
+        **{img_keys[c]: {"dtype": "image" if a.images_brutes else "video",
+                         "shape": (3, a.res, a.res), "names": ["channels", "height", "width"]}
+           for c in cams},
+        "observation.state": {"dtype": "float32", "shape": (sdim,), "names": state_names},
+        "action": {"dtype": "float32", "shape": (pdim + 1,), "names": pose_names + ["gripper"]},
+    }
+
+    out = Path(a.out).expanduser()
+    if out.exists():
+        sys.exit(f"ERREUR: {out} existe deja. Le supprimer ou choisir un autre --out.")
+
+    ds = LeRobotDataset.create(
+        repo_id=a.repo_id,
+        fps=a.fps,
+        features=features,
+        root=out,
+        robot_type=a.robot_type,
+        use_videos=not a.images_brutes,
+        vcodec=a.vcodec,
+    )
+    stockage = "IMAGES BRUTES (aucune compression temporelle)" if a.images_brutes else f"video {a.vcodec}"
+    print(f"Dataset cree : {out}  ({stockage}, res={a.res}, state={a.state})")
+
+    eps = []
+    for b in a.batch:
+        bd = Path(b).expanduser()
+        eps += sorted(d for d in bd.iterdir() if d.is_dir() and d.name.startswith("ep_"))
+    if a.limit:
+        eps = eps[: a.limit]
+    print(f"{len(eps)} episodes a convertir\n")
+
+    n_ok = n_skip = n_frames = 0
+    for k, ep in enumerate(eps):
+        try:
+            data = read_episode(ep, topics)
+        except Exception as e:
+            print(f"  [{k+1}/{len(eps)}] {ep.name}: LECTURE KO ({type(e).__name__}) -> ignore")
+            n_skip += 1
+            continue
+
+        if any(len(data[t][0]) == 0 for t in cam_topics + [state_topic]):
+            manque = [t for t in cam_topics + [state_topic] if len(data[t][0]) == 0]
+            print(f"  [{k+1}/{len(eps)}] {ep.name}: topic(s) absent(s) {manque} -> ignore")
+            n_skip += 1
+            continue
+
+        cam_ts, cam_msgs = data[cam_topic]
+        st_ts, st_msgs = data[state_topic]
+        # fenetre commune a TOUTES les cameras (sinon un tick pourrait tomber avant le
+        # 1er message de la 2e camera et reutiliser sa toute 1re image)
+        cam_t0 = max(data[t][0][0] for t in cam_topics)
+        cam_t1 = min(data[t][0][-1] for t in cam_topics)
+        gr_ts, gr_msgs = data[T_GRIP]
+
+        # fenetre commune aux 2 topics obligatoires
+        t0 = max(cam_t0, st_ts[0])
+        t1 = min(cam_t1, st_ts[-1])
+        step = int(1e9 / a.fps)
+        ticks = np.arange(t0, t1, step, dtype=np.int64)
+        if len(ticks) < 3:
+            print(f"  [{k+1}/{len(eps)}] {ep.name}: trop court -> ignore")
+            n_skip += 1
+            continue
+
+        def pose_at(t):
+            m = st_msgs[nearest_idx(st_ts, t)]
+            v = np.array(m.data if a.state == "cart" else m.position, dtype=np.float32)
+            return v[:pdim]
+
+        def grip_at(t):
+            if len(gr_ts) == 0:
+                return 0.0
+            i = hold_idx(gr_ts, t)
+            return float(gr_msgs[max(i, 0)].data)
+
+        # --- rognage TETE/QUEUE des frames immobiles (2026-09-07, demande Sam) -----
+        # Chaque episode commence par REC_SETTLE (1.5 s bras fige, le temps que le bag
+        # s'abonne) + la re-affirmation de l'etat pince : ~27 frames identiques en tete.
+        # On coupe tant que le bras ne bouge pas, aux DEUX bouts. On ne touche PAS aux
+        # pauses du milieu (saisie / lacher) : le bras y est immobile mais la PINCE agit,
+        # c'est une action que le reseau doit apprendre. Les supprimer lui apprendrait a
+        # ne jamais s'arreter pour saisir.
+        i_lo, i_hi = 0, len(ticks) - 1
+        if a.trim_static > 0:
+            qs = np.array([np.asarray(st_msgs[nearest_idx(st_ts, int(t))].position
+                                      if a.state != "cart" else
+                                      st_msgs[nearest_idx(st_ts, int(t))].data, dtype=np.float64)
+                           for t in ticks])
+            # unites : en mode 'cart' les 3 premieres composantes sont des METRES
+            # (x,y,z) -- on ignore le rotvec ; en mode 'joint' ce sont 5 RADIANS.
+            ncomp = 3 if a.state == "cart" else 5
+            bouge = np.max(np.abs(np.diff(qs[:, :ncomp], axis=0)), axis=1) > a.trim_static
+            if bouge.any():
+                i_lo = int(np.argmax(bouge))                       # 1er mouvement
+                i_hi = int(len(bouge) - np.argmax(bouge[::-1]))    # dernier mouvement
+            else:
+                print(f"  [{k+1}/{len(eps)}] {ep.name}: AUCUN mouvement detecte -> ignore")
+                n_skip += 1
+                continue
+
+        # le dernier tick n'a pas de t+1 -> il ne peut pas fournir d'action
+        added = 0
+        coupe_tete, coupe_queue = i_lo, (len(ticks) - 1) - i_hi
+        for i in range(i_lo, min(i_hi, len(ticks) - 1)):
+            t = int(ticks[i])
+            # MEME tick pour toutes les cameras : chaque vue prend la frame la plus
+            # proche de t dans SA propre serie -> images appariees, pas decalees d'un pas.
+            imgs = {}
+            for c in cams:
+                ts_c, msgs_c = data[T_CAM[c]]
+                imgs[img_keys[c]] = decode_img(msgs_c[nearest_idx(ts_c, t)], a.res)
+            if any(v is None for v in imgs.values()):
+                continue
+            # DECALAGE DE LA PINCE, et pourquoi il est obligatoire avec --state-gripper
+            # ------------------------------------------------------------------------
+            # Sans pince dans l'etat, l'action porte grip(t) : la consigne en vigueur.
+            # Si on met AUSSI grip(t) dans l'etat, les deux colonnes deviennent
+            # rigoureusement identiques a chaque frame -> le reseau apprend a recopier
+            # son entree, obtient une perte quasi nulle sur ce canal, et ne ferme
+            # JAMAIS la pince. Avec --state-gripper l'action porte donc grip(t+1) :
+            # entree et sortie ne different qu'aux 2 transitions de l'episode, qui
+            # sont precisement ce qu'il doit apprendre.
+            t_suiv = int(ticks[i + 1])
+            g_obs = grip_at(t)
+            g_act = grip_at(t_suiv) if a.state_gripper else g_obs
+            etat = (np.concatenate([pose_at(t), [g_obs]]).astype(np.float32)
+                    if a.state_gripper else pose_at(t))
+            ds.add_frame(
+                {
+                    **imgs,
+                    "observation.state": etat,
+                    "action": np.concatenate([pose_at(t_suiv), [g_act]]).astype(np.float32),
+                    "task": a.task,
+                }
+            )
+            added += 1
+
+        ds.save_episode()
+        n_ok += 1
+        n_frames += added
+        rogn = (f"  (rogne : {coupe_tete} en tete, {coupe_queue} en queue)"
+                if a.trim_static > 0 else "")
+        print(f"  [{k+1}/{len(eps)}] {ep.name}: {added} frames{rogn}")
+
+    print(f"\n=== TERMINE : {n_ok} episodes, {n_frames} frames, {n_skip} ignores ===")
+    print(f"Dataset : {out}")
+
+
+if __name__ == "__main__":
+    main()

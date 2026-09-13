@@ -1,121 +1,136 @@
-# Setup Pi5 — Roby le gentil robot
+# Pi5 — reconstruire la machine temps réel de Roby
 
-Procédure pour reconstruire un Pi5 fonctionnel à partir d'un Raspberry Pi OS Ubuntu 24.04 fraîchement installé.
+État relevé sur le Pi5 en service le 2026-09-13 (lecture seule, rien n'a été modifié).
+Remplace l'ancienne version de ce fichier, qui décrivait l'architecture d'avant juin 2026
+(encodeurs AS5048A, esclaves Arduino RS-485, `robot_full.launch.py`) : **tout cela est
+retiré du projet**.
 
-## Hardware
+## Rôle du Pi5 (architecture B)
 
-- Raspberry Pi 5 (8GB recommandé)
-- Drivers stepper DM860I sur axes 1-3 (NEMA via GPIO, alim 24V séparée)
-- 3× Arduino Nano (esclaves RS-485) sur motors 1/2/3
-- 3× AS5048A (PWM, sur arbres moteurs)
-- 1× MAX485 maître (alimenté **5V** + level shifter 4 canaux vers Pi5 3.3V)
-- 1× PCA9685 I2C (servo MG996R axe 4)
-- 2× caméra CSI OV5647 (tête robot)
+Le Pi5 ne fait que le **temps réel** et les **caméras** :
 
-Voir aussi : memory `project_encodeurs_rs485.md` et `project_architecture_materielle.md`.
+- `robot_control.launch.py` : `robot_state_publisher` (**seul** publisher de
+  `/robot_description`), `ros2_control_node` (`RobySystem` + `arm_controller` +
+  `joint_state_broadcaster`), TF `world → base_link` ;
+- `cam_pub_pi2_dual.py` : les deux caméras CSI de la tête.
 
-## 1. OS + ROS2
+MoveIt (`move_group`), RViz, l'inférence, le garde et les outils tournent sur le **PC**
+(`pc_moveit.launch.py`, voir `deploy/pc/README.md`). Procédure de lancement complète,
+avec ses vérifications : skill `/roby-lancer-bras` du dépôt `roby-specs`.
 
-```bash
-# Ubuntu 24.04 Noble pour Pi5 → ROS2 Jazzy
-# Suivre https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html
-sudo apt update && sudo apt install -y ros-jazzy-desktop \
-    ros-jazzy-moveit \
-    ros-jazzy-ros2-control \
-    ros-jazzy-ros2-controllers \
-    ros-jazzy-rmw-cyclonedds-cpp
+## Matériel piloté par le Pi5
 
-# Dépendances Python encodeurs
-sudo apt install -y python3-serial python3-gpiozero python3-yaml
-```
+| Élément | Interface |
+|---|---|
+| Axe 1 (base) | stepper, step/dir en GPIO (`/dev/gpiochip4`, le RP1 du Pi5 — **pas** gpiochip0) |
+| Axes 2 et 3 | NEMA 34 12 Nm, drivers **CL86Y** boucle fermée, step/dir en GPIO |
+| Axe 4 (roulis poignet) | servo, PCA9685 (I2C bus 1, adresse 0x40) canal **CH0** |
+| Axe 5 (tangage poignet) | servo **provisoire**, PCA9685 **CH1** — remplaçant BLDC (carte B-G431B-ESC1 en USB, `roby_wrist_bldc`) prêt mais **non monté** |
+| Verrou de tête (changeur d'outil) | PCA9685 **CH2** |
+| Pince | PCA9685 **CH3** |
+| Caméras | 2 × ov5647 CSI (`cam0`, `cam1`) : `left` = **poignet** (`i2c@88000`), `right` = **vue extérieure** (`i2c@80000`) — vérifié sur les images le 2026-09-13 |
 
-## 2. Activation UART0 (RS-485 maître)
+Alimentation des moteurs **séparée** du Pi5 (coupure physique d'urgence). Pas de fin de
+course : la référence est le **nid** (voir « Pièges »).
 
-Dans `/boot/firmware/config.txt`, ajouter (ou s'assurer présent) :
+## 1. Système
 
-```
-dtparam=uart0=on
-dtparam=i2c_arm=on
-dtparam=spi=on
-```
+- Ubuntu **24.04.4 LTS** (noyau 6.8 raspi), ROS 2 **Jazzy**.
+- Paquets présents sur la machine en service :
+  `ros-jazzy-ros-base ros-jazzy-ros2-control ros-jazzy-ros2-controllers
+  ros-jazzy-rmw-cyclonedds-cpp ros-jazzy-xacro ros-jazzy-robot-state-publisher
+  ros-jazzy-moveit i2c-tools gpiod libgpiod-dev python3-serial`.
+  (`ros-jazzy-moveit` n'est plus utilisé à l'exécution sur le Pi5.)
+- Python utilisateur (`pip3 install --user`) : `picamera2` 0.3.36, `gpiod` 2.4.1,
+  `av`, `simplejpeg`.
+- Groupes de l'utilisateur `roby` : `gpio`, `dialout`, `video`.
 
-Puis reboot. `/dev/ttyAMA0` doit apparaître.
+Fichiers système, à copier depuis `systeme/` :
 
-## 3. Accès GPIO sans sudo
+| Fichier du dépôt | Destination | Rôle |
+|---|---|---|
+| `systeme/99-gpio.rules` | `/etc/udev/rules.d/` | GPIO sans sudo (`sudo groupadd -f gpio`) |
+| `systeme/99-roby-rt.conf` | `/etc/security/limits.d/` | rtprio 98 + memlock illimité pour `roby` (boucle 100 Hz) |
+| `systeme/cpu-performance.service` | `/etc/systemd/system/` puis `systemctl enable` | gouverneur CPU `performance` au démarrage (anti-overrun) |
+| `systeme/config.txt.extrait` | lignes à reporter dans `/boot/firmware/config.txt` | UART0, I2C, SPI, et **les deux ov5647** (`camera_auto_detect=0` + `dtoverlay=ov5647,cam0/cam1`) |
 
-```bash
-sudo groupadd -f gpio
-sudo usermod -aG gpio,dialout $USER
-```
+## 2. Réseau et DDS
 
-Créer `/etc/udev/rules.d/99-gpio.rules` :
+- Sous-réseau dédié `192.168.2.x` : Pi5 = `192.168.2.37`, PC = `192.168.2.95`.
+- `~/.bashrc` : `source /opt/ros/jazzy/setup.bash`, `ROS_DOMAIN_ID=42`,
+  `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`, `CYCLONEDDS_URI=file:///home/roby/cyclone_config.xml`.
+  Il ne source **pas** le workspace : la stack le source elle-même au lancement.
+- `cyclone_config.xml` (ce dossier) → `~/cyclone_config.xml`. Identique à celui en service :
+  multicast coupé, pairs `localhost` et `192.168.2.95`.
 
-```
-SUBSYSTEM=="gpio", GROUP="gpio", MODE="0660"
-```
-
-Puis `sudo udevadm control --reload && sudo udevadm trigger`. Logout/login pour appliquer les groupes.
-
-GPIO chip : **`/dev/gpiochip4`** (RP1 sur Pi5, PAS gpiochip0).
-
-## 4. Variables environnement (~/.bashrc)
-
-```bash
-source /opt/ros/jazzy/setup.bash
-export ROS_DOMAIN_ID=42
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-export CYCLONEDDS_URI=file:///home/$USER/cyclone_config.xml
-```
-
-## 5. Config DDS (CycloneDDS)
-
-Copier `cyclone_config.xml` (présent dans ce dossier) dans `~/cyclone_config.xml`.
-
-**Adapter les `<Peer>`** selon les IPs des autres machines (PC, Pi4) si elles changent. Le `autodetermine="true"` choisit l'interface réseau active automatiquement (pas besoin de fixer `enp87s0` etc. — c'était la cause de BUG-004).
-
-## 6. Workspace ROS2
+## 3. Workspace
 
 ```bash
-mkdir -p ~/ros2_ws/src && cd ~/ros2_ws/src
-git clone https://github.com/Lardonsauvage1/roby-le-gentil-robot.git .
-
-cd ~/ros2_ws
-colcon build --symlink-install
-source install/setup.bash
+git clone https://github.com/Lardonsauvage1/roby-le-gentil-robot.git ~/rlgr
+cd ~/rlgr
+colcon build --packages-select roby_hardware roby_environments \
+    neuroneimitationcarote_description neuroneimitationcarote_moveit_config
+# + roby_wrist_bldc si le poignet BLDC est monte (wrist:=bldc)
 ```
 
-## 7. Calibration encodeurs
+- Le workspace canonique du Pi5 s'appelle **`~/rlgr`** (build par copie, pas en symlink).
+- `roby_control` est un paquet **PC** (bras guide, téléopération) : inutile sur le Pi5.
+- Les scripts de `tools/pi5/` sont appelés par des **liens** dans `~` :
+  `for f in ~/rlgr/tools/pi5/*.py ~/rlgr/tools/pi5/*.sh; do ln -sfn "$f" ~/; done`.
 
-`encoder_calibration.yaml` est livré dans `src/roby_hardware/config/` (zeros pour la pose physique "bras plié 90° + axe 1 aligné", joints URDF tous à 0).
+## 4. Caméras (picamera2 + libcamera compilée)
 
-**Si l'aimant d'un AS5048A est démonté/remplacé**, refaire un snapshot :
-1. Placer manuellement le bras à la pose initiale
-2. Sur Pi5 : lancer un script lecteur (cf `scripts/encoder_publisher.py` qui charge le YAML — pour un nouveau snapshot, adapter `snapshot_zeros.py` documenté en mémoire `project_encodeurs_rs485.md`)
-3. Remplacer les valeurs dans `encoder_calibration.yaml`
-4. `colcon build` pour réinstaller
+`launch_cams.sh` lance `cam_pub_pi2_dual.py` (**un seul** processus pour les deux
+caméras : deux processus cassent le verrouillage de l'ISP ; un verrou `flock` empêche une
+seconde instance). Il a besoin de :
 
-## 8. Firmware Arduino esclave
+- **libcamera 0.5.2 compilée depuis les sources** : paquet source Debian
+  `libcamera_0.5.2+rpt20250903` dans `~/lc_src/`, compilé dans
+  `~/lc_src/libcamera-0.5.2+rpt20250903/build`. Le binding Python est pris dans
+  `build/src/py` via `PYTHONPATH` (voir `tools/pi5/launch_cams.sh`). Les commandes exactes
+  de cette compilation n'ont pas été conservées : **lacune connue**.
+- **`pystubs/pykms.py`** (ce dossier) → `~/pystubs/pykms.py` : picamera2 importe `pykms`
+  (aperçu DRM) qu'on n'utilise pas ; ce stub rend l'import inoffensif.
 
-Code C++ documenté dans la mémoire `project_encodeurs_rs485.md`. Reflasher chaque Arduino Nano avec un `MY_ID` unique (1, 2 ou 3) correspondant au numéro de motor. Câblage MAX485 esclave : DI←D1, DE+RE←D4, RO→D0. AS5048A : signal P (PWM) → D3. Alim esclave en **5V**.
+Topics : `/head_camera/{left,right}/image_raw/compressed`, 15 Hz. Mode **BRUT** par
+défaut depuis le 2026-09-06 (exposition auto, balance des blancs coupée) ;
+`ROBY_CAM_AUTO=1` et `ROBY_CAM_FIGE=1` sont en opt-in.
 
-## 9. Lancement
+## 5. Lancement
+
+Toujours **tête posée dans le nid** avant de lancer (le compteur de pas part de
+`initial_positions.yaml` = pose du nid).
 
 ```bash
-ros2 launch roby_hardware robot_full.launch.py
+# stack temps reel (ce que fait l'etape 1 de /roby-lancer-bras)
+source /opt/ros/jazzy/setup.bash && source ~/rlgr/install/setup.bash
+ros2 launch roby_hardware robot_control.launch.py            # wrist:=bldc pour le poignet BLDC
+# cameras
+bash ~/launch_cams.sh
 ```
 
-Et en parallèle, monitoring encodeurs :
+`robot_full.launch.py` est **obsolète** : il lance aussi un `move_group` sur le Pi5, avec
+une configuration MoveIt ancienne restée dans `install/` (compilée le 2026-05-31) ; un
+second publisher de `/robot_description` provoque la course « mock » décrite dans
+`/roby-lancer-bras`. Ne pas l'utiliser.
 
-```bash
-python3 src/roby_hardware/scripts/encoder_publisher.py
-```
+## 6. Après une coupure d'alimentation des servos
+
+`tools/pi5/pca_wake.sh` réveille le PCA9685 (bit SLEEP, 50 Hz) puis **réécrit les quatre
+canaux** à des valeurs fixes (axe 4 135°, axe 5 125,8°, verrou 50°, pince ouverte 110°).
+⚠️ **Les servos bougent** : ne l'exécuter qu'avec le feu vert de Sam, bras dégagé.
 
 ## Pièges connus
 
-- MAX485 maître **DOIT** être alimenté en 5V (3.3V ne produit pas un différentiel suffisant). Niveau logique 5V → Pi5 protégé par level shifter.
-- GND commun obligatoire entre Pi5, MAX485 maître, et alim 5V esclaves.
-- Ne PAS appeler `tcdrain()` puis basculer DE/RE immédiatement → ajouter `time.sleep(0.001)` après `flush()`.
-- Côté Arduino esclave : `delay(3)` après réception de l'ID avant `DE_RE HIGH` (laisse le maître commuter en RX).
-- `pulseIn()` côté Arduino peut renvoyer occasionnellement des valeurs aberrantes (2-8% selon capteur) → filtre médian glissant côté maître absorbe.
-
-Détails complets : memory `project_encodeurs_rs485.md`.
+- **Un seul publisher de `/joint_states`** (le `joint_state_broadcaster`). Un nœud de
+  simulation lancé sur le domaine 42 a fait sauter l'axe 1 de 38° (BUG-008). Les nœuds de
+  simulation du bras guide se taisent désormais s'ils voient un autre publisher ; simuler
+  sur `ROS_DOMAIN_ID=43`.
+- **Un seul `robot_state_publisher`**, celui du Pi5.
+- Référence **par le nid**, en boucle ouverte : après un choc ou un doute, moteurs coupés,
+  tête reposée dans le nid, stack relancée.
+- `/dev/gpiochip4` et non `gpiochip0` (RP1).
+- `~/dual_node.log` grossit sans rotation (4 Mo au 2026-09-13).
+- Anciens dossiers inutilisés sur la machine, sans effet sur la stack :
+  `~/ros2_ws_ABANDONNE_20260422`, `~/libcamera_*_INUTILISE_*`, `~/pigpio_INUTILISE_*`,
+  `~/_archive_*_20260720`, `~/launch_stack.sh` (lance `robot_full`, obsolète).

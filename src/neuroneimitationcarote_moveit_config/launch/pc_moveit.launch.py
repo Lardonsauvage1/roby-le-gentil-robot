@@ -17,6 +17,9 @@ Usage (PC) :
     export CYCLONEDDS_URI=file:///home/sam/cyclone_config.xml
     unset GTK_PATH
     ros2 launch neuroneimitationcarote_moveit_config pc_moveit.launch.py
+
+Axe 5 : wrist:=bldc (a passer AUSSI a robot_control.launch.py sur le Pi5) limite
+joint_5 a ce que le poignet BLDC suit reellement (0.5 rad/s). Defaut : servo.
 """
 
 from moveit_configs_utils import MoveItConfigsBuilder
@@ -25,9 +28,26 @@ from moveit_configs_utils.launches import (
     generate_moveit_rviz_launch,
 )
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument(
+                "wrist",
+                default_value="servo",
+                choices=["servo", "bldc"],
+                description="actionneur de l'axe 5 : servo (actuel) ou bldc (nouveau poignet)",
+            ),
+            OpaqueFunction(function=_setup),
+        ]
+    )
+
+
+def _setup(context):
+    wrist = LaunchConfiguration("wrist").perform(context)
     moveit_config = MoveItConfigsBuilder(
         "neuroneimitationcarote",
         package_name="neuroneimitationcarote_moveit_config"
@@ -54,6 +74,16 @@ def generate_launch_description():
             "has_acceleration_limits": True,
             "max_acceleration": 2.0,
         }
+    if wrist == "bldc":
+        # Carte : 15 rad/s moteur = 0.75 rad/s bras (reducteur 20:1) ; le noeud
+        # wrist_bldc rampe a 0.5 rad/s / 1.5 rad/s2. Planifier plus vite ferait
+        # trainer l'axe derriere la trajectoire.
+        limits["joint_5"] = {
+            "has_velocity_limits": True,
+            "max_velocity": 0.5,
+            "has_acceleration_limits": True,
+            "max_acceleration": 1.5,
+        }
 
     # Open-loop : on désactive le contrôle de tolérance start-state (steppers sans
     # encodeur actif) — sinon ABORT "start point deviates" après replanification.
@@ -74,4 +104,4 @@ def generate_launch_description():
     # PAS de robot_state_publisher (le Pi5 est l'unique publisher /robot_description).
     # PAS de static_tf world→base_link (fourni par le Pi5).
 
-    return ld
+    return [ld]

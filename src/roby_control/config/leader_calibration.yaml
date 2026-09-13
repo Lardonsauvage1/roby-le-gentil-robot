@@ -1,0 +1,210 @@
+_doc: 'Correspondance bras guide -> Roby (US-019).
+
+  Formule : ecart = deroulement_[-pi,pi](q_leader - zero) ; q_roby = signe * echelle * ecart
+  ; puis CLAMP a [urdf_min, urdf_max].
+
+  Angles en RADIANS. Les valeurs produites sont des angles URDF : le couplage mecanique des
+  axes 2/3 est l''affaire du driver ros2_control, jamais d''ici.
+
+  signe / zero / echelle sont a RELEVER AU MONTAGE : tant que ''calibre'' est false, les valeurs
+  ci-dessous sont neutres et NE DOIVENT PAS etre utilisees pour piloter.'
+_mesures: course_leader et continu proviennent de US-017 (~/roby_leader_calib.yaml), mesures
+  faites SERVOS SEULS. A confirmer une fois montes sur le bras.
+joints:
+- id: 1
+  nom_leader: axe_1_base
+  nom_urdf: joint_1
+  signe: -1.0
+  zero: 2.8547382462551782
+  echelle: 1.0
+  urdf_min: -3.14159
+  urdf_max: 3.14159
+  continu: true
+  calibre: true
+  course_leader: 4.121806
+  notes: '1:1 EN ANGLE (choix Sam, 2026-09-05) : c''est le seul axe ou le proportionnel donnerait
+    une amplification vraiment penalisante (x1,52), qui amplifierait d''autant les tremblements
+    de la main. Consequence assumee : environ 124 deg de la course de Roby restent inatteignables
+    au bras guide (a atteindre autrement : MoveIt, jog). signe -1 : pivot du leader vers la
+    GAUCHE -> valeur decroissante (-47,6 deg), alors que joint_1 croissant fait tourner Roby
+    vers la gauche (axe URDF (0,0,1), convention +X avant / +Y gauche). Sens opposes. Mesure
+    du 2026-09-05. 2026-09-05 : signe +1 -> -1 (verifie en teleoperation) et course de reference
+    REDUITE de moitie — la vitesse maximale est atteinte avec un geste deux fois plus petit.
+    Ce n''est pas une butee mecanique, seulement l''ecart considere comme ''a fond'' pour
+    le joystick. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py), correspondance
+    -> 0.0 deg cote Roby. zero_urdf +0.0 -> -180.0 deg (decalage de +180 deg, roby_leader_offset.py).
+    continu: false -> true : la base couvre un tour complet cote Roby, ses butees sont une
+    couture et non un obstacle. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py),
+    correspondance -> -180.0 deg cote Roby. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py),
+    correspondance -> -180.0 deg cote Roby.'
+  ecart_min: -0.989418
+  ecart_max: 1.071486
+  zero_urdf: -3.14159
+- id: 2
+  nom_leader: axe_2_epaule
+  nom_urdf: joint_2
+  signe: 1.0
+  zero: 2.270291566070749
+  echelle: 1.023534
+  urdf_min: -1.6
+  urdf_max: 2.1
+  continu: false
+  calibre: true
+  course_leader: 3.578777
+  notes: 'signe -1 : LEVER l''epaule du leader -> valeur decroissante (-43,1 deg), alors que
+    joint_2 croissant fait monter Roby (la trajectoire de sortie du nid documente ''j2 descend''
+    avec j2 decroissant). Sens opposes. Echelle reduite de 1 %% : sans marge, la butee du
+    leader tombe EXACTEMENT sur celle de Roby et un simple arrondi declenche le clamp a chaque
+    passage en butee — une alerte qui se declenche toujours ne signale plus rien. Cout : ~1
+    %% de course perdue. Signe +1 -> -1 (roby_leader_signe.py). Zero RELEVE sur la pose reelle
+    du guide (roby_leader_zero.py), correspondance -> 0.0 deg cote Roby. Signe -1 -> +1 (roby_leader_signe.py).
+    zero guide +156.6 -> +166.6 deg (decalage de +10 deg, roby_leader_offset.py --guide).
+    zero guide +166.6 -> +176.6 deg (decalage de +10 deg, roby_leader_offset.py --guide).
+    Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py), correspondance -> 0.0 deg
+    cote Roby. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py), correspondance
+    -> 0.0 deg cote Roby.'
+  ecart_min: -1.352971
+  ecart_max: 2.225806
+  zero_urdf: 0.0
+- id: 3
+  nom_leader: axe_3_coude
+  nom_urdf: joint_3
+  signe: 1.0
+  zero: 2.500388684253595
+  echelle: 1.162129
+  urdf_min: -3.0
+  urdf_max: 0.65
+  continu: false
+  calibre: true
+  course_leader: 3.109379
+  notes: 'signe -1 : LEVER le coude du leader -> valeur decroissante (-56,7 deg), alors que
+    joint_3 croissant leve le coude de Roby (trajectoire de sortie : ''j3 se leve un peu''
+    avec j3 croissant). Sens opposes. Echelle reduite de 1 %% : sans marge, la butee du leader
+    tombe EXACTEMENT sur celle de Roby et un simple arrondi declenche le clamp a chaque passage
+    en butee — une alerte qui se declenche toujours ne signale plus rien. Cout : ~1 %% de
+    course perdue. Zero repris sur la position courante le 2026-09-05 : 2.1932 -> 2.6824 rad.
+    Signe +1 -> -1 (roby_leader_signe.py). Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py),
+    correspondance -> 0.0 deg cote Roby. Signe -1 -> +1 (roby_leader_signe.py). zero guide
+    +156.3 -> +166.3 deg (decalage de +10 deg, roby_leader_offset.py --guide). zero guide
+    +166.3 -> +146.3 deg (decalage de -20 deg, roby_leader_offset.py --guide). zero guide
+    +146.3 -> +136.3 deg (decalage de -10 deg, roby_leader_offset.py --guide). Zero RELEVE
+    sur la pose reelle du guide (roby_leader_zero.py), correspondance -> 0.0 deg cote Roby.
+    Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py), correspondance -> 0.0 deg
+    cote Roby.'
+  ecart_min: -2.224272
+  ecart_max: 0.885107
+  zero_urdf: 0.0
+- id: 4
+  nom_leader: axe_4_poignet
+  nom_urdf: joint_4
+  signe: -1.0
+  zero: 5.333651199478374
+  echelle: 1.0
+  urdf_min: -3.1416
+  urdf_max: 3.1416
+  continu: true
+  calibre: true
+  course_leader: 1.570796
+  notes: '2026-09-09 (Sam) : signe +1 -> -1, sens inverse constate en teleoperation simulee.
+    Et course_leader passee de null a 1,5708 rad : l''axe est CONTINU, donc sans course mesuree
+    le code retombait sur 180 deg par defaut et il fallait un demi-tour de poignet pour atteindre
+    la vitesse maximale. 1,5708 rad (demi-course 45 deg) rend l''axe aussi vif que les autres.
+    Ce n''est PAS une butee mecanique, seulement l''ecart considere comme ''a fond'' par le
+    joystick. Signe -1 -> +1 (roby_leader_signe.py). Signe +1 -> -1 (roby_leader_signe.py).
+    Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py), correspondance -> 0.0 deg
+    cote Roby. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py), correspondance
+    -> 0.0 deg cote Roby. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py), correspondance
+    -> 0.0 deg cote Roby.'
+  ecart_min: null
+  ecart_max: null
+  zero_urdf: 0.0
+- id: 5
+  nom_leader: axe_5_rot_poignet
+  nom_urdf: joint_5
+  signe: 1.0
+  zero: 4.417864669110647
+  echelle: 0.87472
+  urdf_min: -1.6
+  urdf_max: 1.6
+  continu: false
+  calibre: true
+  course_leader: 1.810865
+  notes: 'SIGNE NON DETERMINE : le sens du geste n''a pas ete precise lors de la mesure du
+    2026-09-05 (valeur observee decroissante). A relever. signe +1 (SEUL axe positif) : LEVER
+    la main du leader -> valeur decroissante (-115,8 deg) ; or chez Roby +j5 fait DESCENDRE
+    le bout (cinematique directe : z passe de 1,0812 a 1,0599 m quand j5 va de -0,3 a +0,3),
+    donc lever = j5 decroissant. Meme sens des deux cotes. Echelle reduite de 1 %% : sans
+    marge, la butee du leader tombe EXACTEMENT sur celle de Roby et un simple arrondi declenche
+    le clamp a chaque passage en butee — une alerte qui se declenche toujours ne signale plus
+    rien. Cout : ~1 %% de course perdue. Zero REDEFINI le 2026-09-05 : 3.2873 -> 3.4469 rad,
+    releve sur la position choisie par l''operateur. Debattement recalcule en consequence.
+    2026-09-05 : course de reference bornee a la position atteinte par l''operateur (-33 deg)
+    — la vitesse maximale y est desormais atteinte. Signe reinverse le 2026-09-05 apres essai
+    en teleoperation (-1 -> +1). 2026-09-09 (Sam) : course de reference REDUITE DE MOITIE
+    (3,6217 -> 1,8109 rad) pour doubler la vitesse a geste egal, meme methode que l''axe 1.
+    La course mecanique reelle, elle, ne change pas. 2026-09-09 (Sam) : signe +1 -> -1, sens
+    inverse constate en teleoperation simulee. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py),
+    correspondance -> 0.0 deg cote Roby. Signe -1 -> +1 (roby_leader_signe.py). zero_urdf
+    +0.0 -> +20.0 deg (decalage de +20 deg, roby_leader_offset.py). zero_urdf +20.0 -> -20.0
+    deg (decalage de -40 deg, roby_leader_offset.py). zero_urdf -20.0 -> +60.0 deg (decalage
+    de +80 deg, roby_leader_offset.py). Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py),
+    correspondance -> 60.0 deg cote Roby. Zero RELEVE sur la pose reelle du guide (roby_leader_zero.py),
+    correspondance -> 60.0 deg cote Roby.'
+  ecart_min: -0.572174
+  ecart_max: 1.076855
+  zero_urdf: 1.0471975511965974
+- id: 6
+  nom_leader: pince
+  nom_urdf: gripper
+  signe: -1.0
+  zero: 5.611302
+  echelle: 0.55059
+  urdf_min: 0.0
+  urdf_max: 1.0
+  continu: false
+  calibre: true
+  course_leader: 1.816233
+  notes: sortie = ouverture NORMALISEE 0..1 (0=fermee, 1=ouverte), pas un joint URDF. La conversion
+    vers le servo de Roby (ferme 75 deg / ouvert 110 deg) est faite par le noeud de commande,
+    en proportionnel continu.
+  ecart_min: 0.0
+  ecart_max: 1.816233
+  zero_urdf: 0.0
+_echelle: 'CHOIX Sam du 2026-09-05 : PROPORTIONNEL partout (echelle = course_Roby / course_leader,
+  donc toute la course de Roby est atteignable et l''axe 5 ne clampe plus), SAUF l''axe 1
+  laisse en 1:1 — c''est le seul ou le proportionnel amplifierait fortement le geste (x1,52)
+  et donc les tremblements. Prix assume sur l''axe 1 : ~124 deg de Roby inatteignables a la
+  main.'
+_zero: 'zero      = position du LEADER prise comme reference (a relever au montage). zero_urdf
+  = angle de ROBY correspondant a cette position. Il n''est PAS toujours nul : les butees
+  de Roby sont asymetriques sur l''epaule (-1,6..+2,1, centre +0,25) et le coude (-3,0..+0,65,
+  centre -1,175). Caler le zero du leader sur le CENTRE de la course de Roby est ce qui rend
+  la course pleine effectivement atteignable ; viser le zero URDF ferait deborder d''un cote
+  et n''atteindrait jamais l''autre. La pince fait exception : son zero est la position FERMEE,
+  donc a une extremite -> ecart_min/ecart_max explicites au lieu de +/- demi-course.'
+_zero_calcule: 'zero = MILIEU de la course mecanique mesuree du leader (calcule depuis ~/roby_leader_calib.yaml,
+  US-017), sauf : la pince dont le zero est la position FERMEE, et l''axe 4 continu dont le
+  zero doit etre releve (aucune butee pour l''ancrer). Ce choix centre le leader et Roby l''un
+  sur l''autre, ce qui rend la course pleine effectivement atteignable. Il reste UNE inconnue
+  par axe : le SIGNE, qui ne se deduit d''aucune mesure et demande d''observer les deux bras.'
+_calibre: 'Tous les parametres sont determines (2026-09-05). Zeros calcules depuis les butees
+  mesurees en US-017, sauf l''axe 4 (continu -> pose de reference relevee) et la pince (zero
+  = fermee). Signes etablis en croisant les gestes observes avec la convention de Roby : documentee
+  pour l''epaule et le coude (trajectoire de sortie du nid), calculee par cinematique directe
+  pour les axes 4 et 5. RESTE A VERIFIER SUR LE ROBOT avant tout pilotage.'
+_recentrage: 'Zeros mis a jour apres ecriture des Homing_Offset (2026-09-05) : ID1=-1796,
+  ID2=-1164, ID5=+1834. Le bouclage a disparu sur ces axes ; le deroulement reste en place,
+  il est simplement devenu sans effet pour eux.'
+_zeros: 'Zeros : releves sur la pose choisie par l''operateur. Le 2026-09-05, seul l''axe
+  5 devait etre corrige — les autres ont ete restaures a leurs valeurs anterieures apres une
+  prise globale faite par erreur. La course de reference de joint_1 reste volontairement reduite
+  de moitie.'
+_signes: 'TOUS les signes inverses le 2026-09-05 apres essai en teleoperation simulee : les
+  6 axes partaient a l''envers. Ce n''etait donc pas une erreur par axe mais une convention
+  de sens globalement inversee — mes deductions reposaient toutes sur la meme lecture de la
+  trajectoire de sortie du nid et sur la cinematique directe. L''essai en simulation prime
+  sur la deduction. Sauvegarde : leader_calibration.yaml.avant_inversion_globale'
+_note_course_axe1: 'La course de reference de joint_1 est VOLONTAIREMENT reduite de moitie
+  (demande de Sam, 2026-09-05) : la vitesse maximale est atteinte avec un geste deux fois
+  plus petit. Ce n''est PAS une butee mecanique. ATTENTION : tout recalcul global des ecarts
+  depuis les butees mesurees ECRASE ce reglage — il faut le reappliquer ensuite.'

@@ -1,4 +1,10 @@
-"""Full robot launch: ros2_control (real hardware) + MoveIt move_group.
+"""OBSOLETE depuis l'architecture B (2026-09) -- NE PAS UTILISER. Utiliser
+robot_control.launch.py sur le Pi5 et pc_moveit.launch.py sur le PC (skill
+/roby-lancer-bras). Ce launch demarre un move_group sur le Pi5 : un second
+robot_description / une config MoveIt perimee y provoquent la course « mock ».
+Conserve pour l'historique.
+
+Full robot launch: ros2_control (real hardware) + MoveIt move_group.
 
 Run on Pi5:
     export ROS_DOMAIN_ID=42
