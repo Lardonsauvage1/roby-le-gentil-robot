@@ -43,6 +43,7 @@ from roby_control.leader_teleop_reel import TOPIC_GARDE, vers_modele  # noqa: E4
 
 sys.path.insert(0, os.path.expanduser("~/ros2_ws/tools/pc"))
 from roby_tool_pickup import fkT  # noqa: E402
+import roby_oracle as O  # noqa: E402
 
 POSES = os.path.expanduser("~/roby_poses.yaml")
 
@@ -347,7 +348,9 @@ def main():
         time.sleep(0.5)
         etape("pas_de_reprise_seule", embraye=s.embraye())
 
-        # 8. Descente vers la table : le garde doit geler, la teleop debrayer.
+        # 8. Descente vers la table. Depuis le plancher virtuel de la teleop (2026-09-13),
+        # le bras doit s'arreter AU-DESSUS du plancher du garde (+2,5 cm) sans le faire
+        # geler : on descend tant que le bras descend encore, puis on mesure.
         assert s.embrayer().success
         time.sleep(0.5)
         # Descente a ORIENTATION CONSTANTE, comme une main qui descend la pince sans
@@ -355,17 +358,26 @@ def main():
         # arrivait en butee et c'est le controle de saut qui debrayait, pas le garde.)
         g = s.q_guide.copy()
         t0 = time.monotonic()
+        z_min, t_min = float("inf"), t0
         while s.embraye() and time.monotonic() - t0 < 40:
             g = g + direction_descente(g) * 0.1 * 0.02
             s.q_guide = g
             time.sleep(0.02)
+            z = float(tcp(s.q_mes())[2])
+            if z < z_min - 0.001:
+                z_min, t_min = z, time.monotonic()
+            elif time.monotonic() - t_min > 3.0:
+                break                              # plus de descente depuis 3 s
         t1 = time.monotonic()
-        time.sleep(0.5)
         qf = s.q_mes()
-        time.sleep(1.0)
-        etape("descente_table", debraye=not s.embraye(), apres_s=round(t1 - t0, 1),
-              statut_garde=s.statut(), tcp_z_arret_m=float(tcp(qf)[2]),
-              bouge_apres_gel_mm=1000 * float(np.linalg.norm(tcp(s.q_mes()) - tcp(qf))))
+        p = tcp(qf)
+        plancher_garde = float(O._z_pick(p[0], p[1])) - 0.03
+        time.sleep(0.5)
+        etape("descente_table", embraye=s.embraye(), apres_s=round(t1 - t0, 1),
+              statut_garde=s.statut(), tcp_z_min_m=z_min,
+              plancher_garde_m=plancher_garde,
+              marge_au_plancher_garde_mm=1000 * (z_min - plancher_garde))
+        s.embrayer(False)
         r = s.appeler(s.c_reset, Trigger.Request())
         etape("reset_garde", message=r.message if r else None)
     finally:
