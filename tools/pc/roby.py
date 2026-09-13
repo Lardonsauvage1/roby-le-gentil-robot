@@ -9,6 +9,7 @@
     roby rentrer [--sim] [--go]               sortie -> nid
     roby jog     [--sim]                      panneau de jog fin
     roby collecte                             panneau de collecte du dataset (vrai robot)
+    roby cameras                              relance les 2 cameras et verifie qu'elles arrivent
     roby scene   [--sim] [--scene NOM]        (re)charge la scene de collision
 
 C'est la procedure de /roby-lancer-bras, en code : chaque etape qui agit est precedee de portes
@@ -311,17 +312,7 @@ def cmd_up(a) -> int:
 
     if not SIM:
         etape("3. Caméras (Pi5)")
-        if pi_compte("[c]am_pub_pi2_dual") == 0:
-            ssh("setsid bash -lc 'bash ~/launch_cams.sh >> ~/cams_boot.log 2>&1 < /dev/null &'")
-        hz: dict[str, float] = {}
-
-        def cameras_ok() -> bool:
-            hz.update(sonde.cameras_hz(duree=2.0))
-            return g.verifier_cameras(hz).ok
-
-        attendre(cameras_ok, 30.0, pas=0.5)
-        if not afficher([g.verifier_cameras(hz)]):
-            print("  journal : roby@192.168.2.37:~/dual_node.log")
+        if not lancer_cameras():
             return 1
 
     etape("4. MoveIt + scène de collision (PC)")
@@ -356,6 +347,33 @@ def cmd_up(a) -> int:
             + ("" if SIM else " Suite : `roby sortie` (affiche), puis `roby sortie --go`.")
         )
     return 0 if ok else 1
+
+
+def lancer_cameras() -> bool:
+    """Lance les 2 cameras si aucune ne tourne, puis attend qu'elles arrivent au PC (30 s max)."""
+    if pi_compte("[c]am_pub_pi2_dual") == 0:
+        ssh("setsid bash -lc 'bash ~/launch_cams.sh >> ~/cams_boot.log 2>&1 < /dev/null &'")
+    sonde = g.Sonde(noeud())
+    hz: dict[str, float] = {}
+
+    def cameras_ok() -> bool:
+        hz.update(sonde.cameras_hz(duree=2.0))
+        return g.verifier_cameras(hz).ok
+
+    attendre(cameras_ok, 30.0, pas=0.5)
+    if not afficher([g.verifier_cameras(hz)]):
+        print(f"  journal : {PI}:~/dual_node.log")
+        return False
+    return True
+
+
+def cmd_cameras(a) -> int:
+    """Relance les cameras SEULES (toujours les 2 ensemble : ISP partage). Une camera peut mourir
+    processus vivant (vecu 2026-09-13 : gauche a 0 Hz, droite a 15) : on arrete puis on relance."""
+    print("Roby — relance des caméras (Pi5)")
+    if not afficher([g.Resultat("arrêt", pi_balayer(PI_CAMERAS), "anciennes caméras arrêtées")]):
+        return 1
+    return 0 if lancer_cameras() else 1
 
 
 def cmd_down(a) -> int:
@@ -445,6 +463,7 @@ def main() -> int:
             "--go", action="store_true", help="BOUGER (sans : affiche la trajectoire)"
         )
     commande("jog", "panneau de jog fin")
+    commande("cameras", "relancer les 2 caméras (vrai robot)")
     commande("collecte", "panneau de collecte du dataset")
 
     a = ap.parse_args()
@@ -452,6 +471,9 @@ def main() -> int:
     # pas, argparse l'ecrase par le defaut du sous-parseur dans `roby --sim status`.
     if ("--sim" in sys.argv[1:]) != SIM:
         print("❌ passer par le lanceur `roby` : c'est lui qui fixe le domaine selon --sim.", file=sys.stderr)
+        return 2
+    if a.cmd == "cameras" and SIM:
+        print("❌ pas de caméras en simulation.", file=sys.stderr)
         return 2
     if a.cmd == "collecte" and SIM:
         print("❌ pas de collecte en simulation : pas de caméras, les épisodes seraient sans images.", file=sys.stderr)
@@ -465,6 +487,7 @@ def main() -> int:
         "jog": lambda a: cmd_panneau("roby_fine_jog.sh", LOG["jog"]),
         "collecte": lambda a: cmd_panneau("roby_collect_panel.sh", LOG["collecte"], scene=True),
         "scene": cmd_scene,
+        "cameras": cmd_cameras,
     }
     return actions[a.cmd](a)
 
