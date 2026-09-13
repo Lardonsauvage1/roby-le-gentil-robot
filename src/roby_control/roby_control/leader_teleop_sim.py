@@ -29,6 +29,8 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
+from roby_control.sim_joint_states import GardeJointStates
+
 # Butees URDF de Roby (source : neuroneimitationcarote_description).
 LIMITES = {
     "joint_1": (-3.14159, 3.14159),
@@ -97,6 +99,8 @@ class TeleopSim(Node):
         self.create_subscription(JointState, "/leader/joystick", self._on_joy, 10,
                                  callback_group=self.cb)
         self.pub = self.create_publisher(JointState, "/joint_states", 10)
+        # Jamais a cote d'un vrai robot (BUG-008) : muet si un autre publisher existe.
+        self._garde_js = GardeJointStates(self, self.pub)
         rate = float(self.get_parameter("publish_rate_hz").value)
         self.dt = 1.0 / rate
         self.create_timer(self.dt, self._tick, callback_group=self.cb)
@@ -146,7 +150,7 @@ class TeleopSim(Node):
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.name = list(self.q.keys())
         msg.position = [self.q[n] for n in msg.name]
-        self.pub.publish(msg)
+        self._garde_js.publier(msg)
 
     def _pose_valide(self, q):
         """True si la pose est sans collision. En cas de doute -> False (on ne bouge pas)."""

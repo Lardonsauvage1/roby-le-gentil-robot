@@ -38,6 +38,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from std_srvs.srv import SetBool, Trigger
 
 from roby_control.leader_mapping import charger
+from roby_control.sim_joint_states import GardeJointStates
 
 sys.path.insert(0, os.path.expanduser("~/ros2_ws/tools/pc"))
 from roby_tool_pickup import LIMITS, Rz, dls, fkT, jac, rotvec   # noqa: E402
@@ -156,6 +157,8 @@ class TeleopCart(Node):
 
         self.pub = (self.create_publisher(JointState, "/joint_states", 10)
                     if self.PUBLIE_JOINT_STATES else None)
+        # Jamais a cote d'un vrai robot (BUG-008) : muet si un autre publisher existe.
+        self._garde_js = GardeJointStates(self, self.pub) if self.pub is not None else None
         self.pub_etat = self.create_publisher(Float64MultiArray,
                                               "/teleop_cart/etat", 10)
         # On publie sur /oracle_debug : c'est le topic de marqueurs deja branche dans
@@ -598,8 +601,8 @@ class TeleopCart(Node):
         m.header.stamp = self.get_clock().now().to_msg()
         m.name = list(J)
         m.position = [float(v) for v in self.q]
-        if self.pub is not None:
-            self.pub.publish(m)
+        if self._garde_js is not None:
+            self._garde_js.publier(m)
         if self.guide is not None:
             T = fkT(self.q)
             err = float(np.linalg.norm(rotvec(T[:3, :3].T @ self.guide[1])))

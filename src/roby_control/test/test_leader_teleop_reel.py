@@ -452,6 +452,34 @@ def test_debrayer_arrete_le_bras_la_ou_il_est(banc):
 
 
 # ------------------------------------------------------------------ mode simulation
+def test_bras_simule_muet_a_cote_d_un_vrai_robot():
+    """BUG-008 : le noeud du bras SIMULE ne publie pas /joint_states si un autre
+    publisher existe (joint_state_broadcaster du vrai robot)."""
+    n = TeleopCart()
+    autre = n.create_publisher(JointState, "/joint_states", 10)   # le « robot »
+    recus = []
+    ecoute = n.create_subscription(JointState, "/joint_states", recus.append, 10)
+    ex = SingleThreadedExecutor()
+    ex.add_node(n)
+
+    def tourner(duree):
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < duree:
+            n._publier()                     # ce que fait chaque tick du noeud
+            ex.spin_once(timeout_sec=0.02)
+
+    try:
+        tourner(3.0)                         # > attente de decouverte (2 s)
+        assert recus == []
+        n.destroy_publisher(autre)
+        tourner(1.5)
+        assert recus, "seul a nouveau : la simulation doit publier"
+    finally:
+        n.destroy_subscription(ecoute)
+        ex.shutdown()
+        n.destroy_node()
+
+
 def test_repere_bleu_au_point_commande():
     """La boule bleue et la croix designent le meme point : bout de pince, offset
     d'outil compris. Avant le 2026-09-13, la boule etait a link_gripper, 5 cm en

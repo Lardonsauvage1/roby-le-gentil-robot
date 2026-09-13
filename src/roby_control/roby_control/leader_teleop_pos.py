@@ -30,6 +30,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
 from roby_control.leader_mapping import charger
+from roby_control.sim_joint_states import GardeJointStates
 
 
 class TeleopPos(Node):
@@ -65,6 +66,8 @@ class TeleopPos(Node):
         self.create_timer(0.5, self._recharger_si_change)
 
         self.pub = self.create_publisher(JointState, "/joint_states", 10)
+        # Jamais a cote d'un vrai robot (BUG-008) : muet si un autre publisher existe.
+        self._garde_js = GardeJointStates(self, self.pub)
         self.create_subscription(JointState, "/leader/joint_states", self._cb, 20)
         hz = float(self.get_parameter("publish_rate_hz").value)
         self.create_timer(1.0 / hz, self._tick)
@@ -125,7 +128,7 @@ class TeleopPos(Node):
                 self._publie[nom] = v
             m.name.append(nom)
             m.position.append(float(v))
-        self.pub.publish(m)
+        self._garde_js.publier(m)
 
     def _fichier_calib(self):
         if self._chemin:
