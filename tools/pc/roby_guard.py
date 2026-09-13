@@ -66,8 +66,9 @@ from control_msgs.action import FollowJointTrajectory
 from moveit_msgs.srv import GetStateValidity
 
 # --- cinematique + butees : une seule source de verite = roby_oracle.py ---
-sys.path.insert(0, os.path.expanduser("~"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 import roby_oracle as O            # noqa: E402  (fkT, fk_pos, LIMITS, J, _z_pick, D_XYZ...)
+import roby_gates                  # noqa: E402
 
 J = O.J                            # ["joint_1"..."joint_5"]
 NEPS = 1e-6
@@ -396,6 +397,12 @@ def main():
     a = ap.parse_args()
 
     rclpy.init()
+    # Porte (roby_gates) : le garde est le dernier filtre avant les moteurs. Sans scene, son
+    # anti-collision ne connait ni la table ni la cuisine (seance du 2026-09-13 : scene VIDE et
+    # pourtant « moveit=OUI ») ; il refuse donc de demarrer, sauf --no-moveit assume.
+    porte = rclpy.create_node("roby_guard_porte")
+    roby_gates.exiger(porte, "roby_guard", scene=not a.no_moveit)
+    porte.destroy_node()
     node = Guard(a)
     ex = MultiThreadedExecutor()
     ex.add_node(node)

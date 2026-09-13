@@ -6,7 +6,7 @@ l'orientation du depart, on descend verticalement, on mesure l'ecart max FK.
 """
 import os, sys
 import numpy as np
-sys.path.insert(0, os.path.expanduser("~"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 import roby_tool_pickup as tp
 import roby_oracle as o
 

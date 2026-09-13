@@ -291,7 +291,7 @@ class Motion:
             self._ros_init()
 
     def _ros_init(self):
-        sys.path.insert(0, os.path.expanduser("~"))
+        sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
         import roby_tool_pickup
         self.dls = roby_tool_pickup.dls
         # Descente = position prioritaire (5 DOF) : vaut pour l'atteignabilite (ik)
@@ -597,6 +597,18 @@ def run(mode, n_episodes, out_dir, seed, vel, cart_speed, no_record=False, recov
     _pref = "batch_recovery" if recovery else "batch"
     batch_dir = os.path.join(out_dir, f"{_pref}_{seed}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
     rec = make_recorder(mode, batch_dir, no_record)
+    if mode == "real" and not no_record:
+        # Porte cameras : sans les flux, le recorder ecrit EN SILENCE des bags sans images
+        # (vecu 2026-07-15 : 1,7 Mo, 0 image). Seules les cameras demandees (ROBY_CAMS).
+        import roby_gates
+        cams = os.environ.get("ROBY_CAMS", "both").lower()
+        hz = roby_gates.Sonde(motion.pk).cameras_hz()
+        if cams in hz:
+            hz = {cams: hz[cams]}
+        porte = roby_gates.verifier_cameras(hz)
+        if not porte.ok:
+            sys.exit(f"REFUS : cameras {porte.message} — les episodes seraient sans images.")
+        print(f"    [porte] cameras {porte.message}")
     if mode == "real":
         print("*** --no-record : le bras BOUGE mais AUCUN bag n'est enregistre (verif) ***"
               if no_record else f"Bags -> {batch_dir}")

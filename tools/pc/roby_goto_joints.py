@@ -13,6 +13,7 @@ import sys
 import time
 
 import rclpy
+import roby_gates
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from builtin_interfaces.msg import Duration
@@ -21,7 +22,7 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from sensor_msgs.msg import JointState
 
 import os
-sys.path.insert(0, os.path.expanduser("~"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 from roby_oracle import LIMITS          # butees articulaires = source unique
 
 JOINTS = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
@@ -73,6 +74,7 @@ def main():
     a = ap.parse_args()
     rclpy.init()
     n = Goto()
+    roby_gates.exiger(n, "roby_goto_joints")  # lecture seule ; quitte si la stack est incoherente
     cur = n.wait()
     if cur is None:
         print("pas de /joint_states"); return 1

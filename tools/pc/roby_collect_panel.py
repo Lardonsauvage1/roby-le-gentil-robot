@@ -25,8 +25,10 @@ from tkinter import ttk
 HOME = os.path.expanduser("~")
 DATASETS = os.path.join(HOME, "roby_datasets")
 STAGING = os.path.join(DATASETS, ".staging")
-ORACLE_SH = os.path.join(HOME, "roby_oracle_real.sh")
-VIDEO_SRV = os.path.join(HOME, "bag_video_server.py")
+# Code : le voisin de CE fichier (meme copie du depot), jamais celui du home. Donnees : le home.
+ICI = os.path.dirname(os.path.realpath(__file__))
+ORACLE_SH = os.path.join(ICI, "roby_oracle_real.sh")
+VIDEO_SRV = os.path.join(ICI, "bag_video_server.py")
 VIDEO_PORT = 8091
 
 # Scenario RATTRAPAGE (ROBY_RECOVERY=1) : le panneau lance l'oracle avec --recovery et

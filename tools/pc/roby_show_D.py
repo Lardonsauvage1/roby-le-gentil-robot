@@ -17,7 +17,7 @@ from rclpy.qos import QoSProfile, DurabilityPolicy
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 
-sys.path.insert(0, os.path.expanduser("~"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 import roby_oracle as o
 
 FRAME = "world"

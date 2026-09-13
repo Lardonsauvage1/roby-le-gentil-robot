@@ -41,7 +41,7 @@ torch.set_num_threads(6)
 import numpy as np
 import cv2
 
-sys.path.insert(0, os.path.expanduser("~"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 from roby_oracle import fkT, LIMITS                      # FK = celle du dataset
 from roby_tool_pickup import dls, rotvec                 # IK amortie + rotation-vector
 # Pretraitement PARTAGE : meme implementation que roby_infer.py (cf roby_vision.py).

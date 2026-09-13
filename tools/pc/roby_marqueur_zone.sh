@@ -5,4 +5,4 @@ source /opt/ros/jazzy/setup.bash
 [ -f "$HOME/ros2_ws/install/setup.bash" ] && source "$HOME/ros2_ws/install/setup.bash"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 # --ros-args est indispensable : sans lui rclpy ignore les -p et garde les defauts.
-exec /usr/bin/python3 "$HOME/ros2_ws/tools/pc/roby_marqueur_zone.py" --ros-args "$@"
+exec /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/roby_marqueur_zone.py" --ros-args "$@"

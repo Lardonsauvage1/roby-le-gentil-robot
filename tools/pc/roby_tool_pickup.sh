@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
 # Séquence de prise d'outil via MoveIt. LE ROBOT BOUGE.
-source "$HOME/roby_env.sh" >/dev/null 2>&1
-exec /usr/bin/python3 "$HOME/roby_tool_pickup.py" "$@"
+set -e
+ici="$(dirname "$(readlink -f "$0")")"
+source "$ici/roby_ros_env.sh"   # domaine 42 (43 si ROBY_SIM=1), paquets de CE workspace
+exec /usr/bin/python3 "$ici/roby_tool_pickup.py" "$@"

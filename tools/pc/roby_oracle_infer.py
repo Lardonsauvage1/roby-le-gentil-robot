@@ -28,7 +28,7 @@ import random
 import sys
 import time
 
-sys.path.insert(0, os.path.expanduser("~"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 import roby_oracle as O            # Motion, sample_table, sample_aerien, D_XYZ, J, _in_limits...
 
 

@@ -17,6 +17,7 @@ from tkinter import ttk
 GRIP_BAS, GRIP_HAUT = 0.4, 0.6
 
 HOME = os.path.expanduser("~")
+ICI = os.path.dirname(os.path.realpath(__file__))  # code : les voisins de CE fichier, pas le home
 MODEL = os.environ.get("ROBY_INFER_MODEL", os.path.join(
     HOME, "lerobot-experiments/outputs/propre_263M_cooldown2/263M/pretrained_model"))
 POSE_HAUTE = os.environ.get("ROBY_POSE_HAUTE", "depart_infer_comp")
@@ -338,7 +339,7 @@ class Panel:
     def _start(self, enregistrer=False):
         # La commande du modele est construite AVANT tout lancement : la fiche de
         # l'essai enregistre les reglages reels, et le bag demarre des le clic.
-        cmd = [PY_DEPLOY, os.path.join(HOME, "roby_infer_cart.py"),
+        cmd = [PY_DEPLOY, os.path.join(ICI, "roby_infer_cart.py"),
                "--model", MODEL, "--hz", "15", "--steps", "10",
                "--w-ori", "0.5", "--go"]
         if INFER_CPUS:
@@ -378,7 +379,7 @@ class Panel:
                 return
             if not self.guard or self.guard.poll() is not None:
                 self.guard = subprocess.Popen(
-                    ["bash", os.path.join(HOME, "roby_guard.sh")],
+                    ["bash", os.path.join(ICI, "roby_guard.sh")],
                     env=ENV, stdout=open("/tmp/guard.log", "w"),
                     stderr=subprocess.STDOUT, preexec_fn=os.setsid)
                 self._log(f"garde lancé (PID {self.guard.pid})")
@@ -452,7 +453,7 @@ class Panel:
         time.sleep(1.5)
         self._log(f"remontée vers « {POSE_HAUTE} »…")
         self.root.after(0, lambda: self.etat.set("remontée du bras vers la pose haute…"))
-        r = subprocess.run(["bash", os.path.join(HOME, "roby_moveit_seq.sh"),
+        r = subprocess.run(["bash", os.path.join(ICI, "roby_moveit_seq.sh"),
                             "--vel", "0.08", POSE_HAUTE],
                            env=ENV, capture_output=True, text=True)
         ok = "OK (code=1)" in (r.stdout or "")

@@ -30,7 +30,7 @@ export CYCLONEDDS_URI="${CYCLONEDDS_URI:-file://$HOME/cyclone_config.xml}"
 # Meme valeur que le panneau du modele (roby_infer_panel.py).
 export ROBY_J3_SCALE="${ROBY_J3_SCALE:-0.9299}"
 
-GARDE_PY="$HOME/ros2_ws/tools/pc/roby_guard.py"
+GARDE_PY="$(dirname "$(readlink -f "$0")")/roby_guard.py"
 GARDE_PID=""
 existant=$(pgrep -f "^[^ ]*python[^ ]* [^ ]*roby_guard\.py" | head -1 || true)
 if [ -n "$existant" ]; then

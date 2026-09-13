@@ -38,7 +38,7 @@ from lerobot.policies.factory import make_pre_post_processors
 # modeles actuels (96/128) -- le risque n'etait pas la formule, identique partout,
 # mais le parametre.
 import os as _os, sys as _sys
-_sys.path.insert(0, _os.path.expanduser("~"))
+_sys.path.insert(0, _os.path.dirname(_os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 from roby_vision import decode_resize, image_keys, img_size_from_policy
 
 J = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]

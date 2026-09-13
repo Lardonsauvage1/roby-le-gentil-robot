@@ -10,7 +10,7 @@ Usage : roby_replay_cartesian.py <bag_cartesien> [--rate 20] [--lead-in 4] [--go
   sans --go = DRY (reconstruit + verifie + affiche, NE BOUGE PAS).
 """
 import argparse, os, sys, time
-sys.path.insert(0, os.path.expanduser("~"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 import numpy as np
 from roby_oracle import fkT, D_JOINTS
 from roby_tool_pickup import dls, rotvec
@@ -33,6 +33,7 @@ def compense(j):
     return out
 
 import rclpy
+import roby_gates
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from builtin_interfaces.msg import Duration
@@ -138,6 +139,7 @@ def main():
         print("DRY : rien envoye. Ajoute --go pour bouger (bras + pince)."); return 0
 
     rclpy.init(); node = Node("roby_replay_cart")
+    roby_gates.exiger(node, "roby_replay_cartesian")  # lecture seule ; quitte si la stack est incoherente
     ac = ActionClient(node, FollowJointTrajectory, "/arm_controller/follow_joint_trajectory")
     grip_pub = node.create_publisher(Bool, "/gripper", 10)
     if not ac.wait_for_server(timeout_sec=10):

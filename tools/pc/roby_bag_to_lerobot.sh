@@ -4,4 +4,4 @@
 set -e
 source /opt/ros/jazzy/setup.bash
 [ -f "$HOME/ros2_ws/install/setup.bash" ] && source "$HOME/ros2_ws/install/setup.bash"
-exec "$HOME/ipex_test_venv/bin/python" "$HOME/ros2_ws/tools/pc/roby_bag_to_lerobot.py" "$@"
+exec "$HOME/ipex_test_venv/bin/python" "$(dirname "$(readlink -f "$0")")/roby_bag_to_lerobot.py" "$@"

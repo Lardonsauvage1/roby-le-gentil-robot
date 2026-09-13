@@ -11,7 +11,7 @@ import sys
 import os
 import shutil
 
-sys.path.insert(0, os.path.expanduser("~"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 import numpy as np
 from roby_oracle import fkT
 from roby_tool_pickup import rotvec

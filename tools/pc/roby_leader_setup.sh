@@ -9,4 +9,4 @@
 set -e
 VENV="$HOME/lerobot-experiments/venv/bin/python"
 [ -x "$VENV" ] || { echo "venv lerobot introuvable : $VENV"; exit 1; }
-exec "$VENV" "$HOME/ros2_ws/tools/pc/roby_leader_setup.py" "$@"
+exec "$VENV" "$(dirname "$(readlink -f "$0")")/roby_leader_setup.py" "$@"

@@ -19,6 +19,7 @@ import sys
 import time
 
 import rclpy
+import roby_gates
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from builtin_interfaces.msg import Duration
@@ -98,6 +99,7 @@ def main():
 
     rclpy.init()
     node = Node("roby_replay")
+    roby_gates.exiger(node, "roby_replay")  # lecture seule ; quitte si la stack est incoherente
     ac = ActionClient(node, FollowJointTrajectory, "/arm_controller/follow_joint_trajectory")
     grip_pub = node.create_publisher(Bool, "/gripper", 10)
     if not ac.wait_for_server(timeout_sec=10):

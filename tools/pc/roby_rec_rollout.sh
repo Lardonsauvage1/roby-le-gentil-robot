@@ -17,7 +17,7 @@
 
 OUT_ROOT="${1:-$HOME/roby_datasets/rollouts}"
 mkdir -p "$OUT_ROOT"
-source "$HOME/roby_env.sh" >/dev/null 2>&1
+source "$(dirname "$(readlink -f "$0")")/roby_ros_env.sh" >/dev/null 2>&1
 
 TOPICS=(
   /head_camera/left/image_raw/compressed

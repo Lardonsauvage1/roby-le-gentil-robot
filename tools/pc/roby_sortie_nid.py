@@ -28,6 +28,8 @@ from control_msgs.action import FollowJointTrajectory
 from std_msgs.msg import Bool
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
+import roby_gates
+
 JOINTS = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
 YAML = os.path.expanduser("~/roby_sortie_nid.yaml")
 SAFE_VEL = 0.15   # rad/s max par joint (lent / sur)
@@ -85,6 +87,16 @@ def main():
 
     rclpy.init()
     node = rclpy.create_node("roby_sortie_nid")
+    # Porte : stack saine ET bras au 1er point de la trajectoire (0,5 deg). Partir d'ailleurs,
+    # c'est un rattrapage en ligne droite articulaire pres du nid, sans anti-collision.
+    depart = dict(zip(traj.joint_names, traj.points[0].positions))
+    try:
+        roby_gates.exiger(node, "roby_sortie_nid", depart=depart)
+    except SystemExit:
+        if a.reverse:
+            print("   Pour rentrer : amener d'abord le bras a la pose 'sortie' par MoveIt "
+                  "(anti-collision) : roby_moveit_seq.sh sortie", file=sys.stderr)
+        raise
     ac = ActionClient(node, FollowJointTrajectory, "/arm_controller/follow_joint_trajectory")
     if not ac.wait_for_server(timeout_sec=5.0):
         print("❌ arm_controller absent (stack up ?)")

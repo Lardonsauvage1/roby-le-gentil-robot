@@ -26,7 +26,7 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.expanduser("~"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 from roby_vision import decode_resize, image_keys, img_size_from_policy
 
 from rosbag2_py import SequentialReader, StorageOptions, ConverterOptions

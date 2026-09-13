@@ -28,7 +28,7 @@ from rclpy.node import Node
 from std_msgs.msg import Bool, Float32
 
 import sys as _sys, os as _os
-_sys.path.insert(0, _os.path.expanduser("~"))
+_sys.path.insert(0, _os.path.dirname(_os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 from roby_gripper import GRIP_HAUT, GRIP_BAS, GRIP_MILIEU
 
 WIN = 60.0          # secondes affichees

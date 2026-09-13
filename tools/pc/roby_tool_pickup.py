@@ -23,6 +23,8 @@ import time
 
 import numpy as np
 import rclpy
+
+import roby_gates
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from std_msgs.msg import Bool
@@ -134,6 +136,10 @@ def load_pose(name):
 class Pickup(Node):
     def __init__(self, dry=False):
         super().__init__("roby_tool_pickup")
+        if not dry:
+            # Porte : libre par MoveIt (scene exigee), lignes droites directes au controleur
+            # (/joint_states sans fantome exige). L'oracle passe par ici.
+            roby_gates.exiger(self, "roby_tool_pickup", scene=True)
         self.dry = dry
         self.cur = None
         self.create_subscription(JointState, "/joint_states", self._js, 10)

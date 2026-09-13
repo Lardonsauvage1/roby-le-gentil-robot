@@ -13,4 +13,4 @@ export ROS_DOMAIN_ID=42
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export CYCLONEDDS_URI="file://$HOME/cyclone_config.xml"
 
-exec /usr/bin/python3 "$HOME/roby_cam_view.py"
+exec /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/roby_cam_view.py"
