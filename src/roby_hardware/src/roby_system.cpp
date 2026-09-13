@@ -231,7 +231,7 @@ hardware_interface::CallbackReturn RobySystem::on_init(
       bldc_command_topic_ = get_param(joint.name + "_bldc_command_topic", bldc_command_topic_);
       bldc_state_topic_ = get_param(joint.name + "_bldc_state_topic", bldc_state_topic_);
       bldc_state_timeout_s_ = get_param_double(joint.name + "_bldc_state_timeout_s", 0.2);
-      bldc_wait_on_activate_s_ = get_param_double(joint.name + "_bldc_wait_on_activate_s", 8.0);
+      bldc_wait_on_activate_s_ = get_param_double(joint.name + "_bldc_wait_on_activate_s", 16.0);
       bldc_last_cmd_ = joints_[i].position;
       RCLCPP_INFO(rclcpp::get_logger("RobySystem"),
         "%s : BLDC externe, consigne -> %s, mesure <- %s", joint.name.c_str(),
@@ -687,33 +687,62 @@ void RobySystem::on_gripper_deg(const std_msgs::msg::Float64::SharedPtr msg)
   RCLCPP_INFO(rclcpp::get_logger("RobySystem"), "/roby/gripper_deg -> %.1f deg", a);
 }
 
+void RobySystem::stop_background_threads()
+{
+  // Idempotent, et joint un fil meme s'il s'est termine seul : un std::thread encore
+  // joignable a sa destruction appelle std::terminate.
+
+  // Axe BLDC : plus de consigne publiee => le noeud wrist_bldc detecte le
+  // silence et s'arrete sur rampe ; la carte tient la position (moteur asservi).
+  bldc_pub_running_ = false;
+  if (bldc_pub_thread_.joinable()) {
+    bldc_pub_thread_.join();
+  }
+  bldc_cmd_valid_.store(false);
+
+  // Stop le thread de reglage PID live (executeur des abonnements)
+  tuning_running_ = false;
+  if (tuning_thread_.joinable()) {
+    tuning_thread_.join();
+  }
+  pid_sub_.reset();
+  head_lock_sub_.reset();
+  gripper_sub_.reset();
+  gripper_deg_sub_.reset();
+  bldc_state_sub_.reset();
+  bldc_cmd_pub_.reset();
+  tuning_node_.reset();
+}
+
+// Chemin d'ERREUR (watchdog d'ecart : write() rend ERROR) : le composant part en
+// FINALIZED sans passer par on_deactivate. Avant le 2026-09-13, le fil BLDC continuait
+// alors de publier la derniere consigne a 100 Hz -- le noeud wrist_bldc ne voyait jamais
+// le silence qui l'arrete sur rampe -- et les fils encore joignables provoquaient
+// std::terminate a la sortie du processus. On arrete les FILS ; les pilotes des moteurs
+// ne sont PAS coupes ici (couper les steppers pourrait laisser tomber le bras).
+hardware_interface::CallbackReturn RobySystem::on_error(
+  const rclcpp_lifecycle::State & previous_state)
+{
+  stop_background_threads();
+  return hardware_interface::SystemInterface::on_error(previous_state);
+}
+
+hardware_interface::CallbackReturn RobySystem::on_shutdown(
+  const rclcpp_lifecycle::State & previous_state)
+{
+  stop_background_threads();
+  return hardware_interface::SystemInterface::on_shutdown(previous_state);
+}
+
+RobySystem::~RobySystem()
+{
+  stop_background_threads();
+}
+
 hardware_interface::CallbackReturn RobySystem::on_deactivate(
   const rclcpp_lifecycle::State & /*previous_state*/)
 {
-  // Axe BLDC : plus de consigne publiee => le noeud wrist_bldc detecte le
-  // silence et s'arrete sur rampe ; la carte tient la position (moteur asservi).
-  if (bldc_pub_running_) {
-    bldc_pub_running_ = false;
-    if (bldc_pub_thread_.joinable()) {
-      bldc_pub_thread_.join();
-    }
-    bldc_cmd_valid_.store(false);
-  }
-
-  // Stop le thread de reglage PID live
-  if (tuning_running_) {
-    tuning_running_ = false;
-    if (tuning_thread_.joinable()) {
-      tuning_thread_.join();
-    }
-    pid_sub_.reset();
-    head_lock_sub_.reset();
-    gripper_sub_.reset();
-    gripper_deg_sub_.reset();
-    bldc_state_sub_.reset();
-    bldc_cmd_pub_.reset();
-    tuning_node_.reset();
-  }
+  stop_background_threads();
 
   // Shutdown all drivers
   for (auto & s : steppers_) {

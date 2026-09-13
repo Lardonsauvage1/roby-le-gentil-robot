@@ -69,6 +69,14 @@ public:
   hardware_interface::CallbackReturn on_deactivate(
     const rclcpp_lifecycle::State & previous_state) override;
 
+  hardware_interface::CallbackReturn on_error(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  hardware_interface::CallbackReturn on_shutdown(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  ~RobySystem() override;
+
   std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
   std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
 
@@ -104,6 +112,8 @@ private:
   void on_bldc_state(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
   /// Thread 100 Hz qui publie la derniere consigne BLDC (hors thread RT).
   void bldc_publish_loop();
+  // Arrete les fils de fond (publication BLDC, executeur des abonnements) ; idempotent.
+  void stop_background_threads();
   /// Mesure BLDC exploitable (liaison OK + recale + fraiche) ? Remplit `pos`.
   bool bldc_feedback(double & pos) const;
 

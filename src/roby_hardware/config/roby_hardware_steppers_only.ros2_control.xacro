@@ -73,7 +73,9 @@
                     <param name="joint_5_bldc_command_topic">/roby/wrist_bldc/command</param>
                     <param name="joint_5_bldc_state_topic">/roby/wrist_bldc/state</param>
                     <param name="joint_5_bldc_state_timeout_s">0.2</param>
-                    <param name="joint_5_bldc_wait_on_activate_s">8.0</param>
+                    <!-- >= startup_homing_timeout_s du noeud (15 s, wrist_bldc.yaml) : sinon
+                         une carte lente a se recaler faisait demarrer en mode repli. -->
+                    <param name="joint_5_bldc_wait_on_activate_s">16.0</param>
                     </xacro:if>
                     <!-- I2C config (unused but kept for init) -->
                     <param name="i2c_bus">/dev/i2c-1</param>

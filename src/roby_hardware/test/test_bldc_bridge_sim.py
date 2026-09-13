@@ -146,7 +146,10 @@ def test_3_wrist_node_loss_keeps_arm_active(stack, client):
     proc, log_path = stack
     _, data, _ = client
     held = joint5(data)
-    subprocess.run(["pkill", "-INT", "-f", "wrist_bldc_node"], check=False)
+    # Seulement le noeud de CETTE stack (sa session) : un « pkill -f » global tuait
+    # aussi un vrai noeud du poignet s'il tournait sur la machine (revue 2026-09-13).
+    subprocess.run(["pkill", "-INT", "-s", str(proc.pid), "-f", "wrist_bldc_node"],
+                   check=False)
     time.sleep(1.5)
     stamp = data["js"].header.stamp
     time.sleep(0.5)
