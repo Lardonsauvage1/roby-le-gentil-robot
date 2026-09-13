@@ -452,6 +452,87 @@ def test_debrayer_arrete_le_bras_la_ou_il_est(banc):
 
 
 # ------------------------------------------------------------------ mode simulation
+def _message_guide(cal, q):
+    m = JointState()
+    for i, nom in enumerate(J):
+        j = cal.par_nom[nom]
+        m.name.append(j.nom_leader)
+        m.position.append(float(j.convertir_inverse(float(q[i]))[0]))
+    return m
+
+
+def _cycles(n, msg, cycles=10):
+    for _ in range(cycles):
+        n._cb(msg)
+        n._tick()
+
+
+def test_calibration_rechargee_embraye_ne_bouge_pas(tmp_path):
+    """Revue du 2026-09-13 : recharger la calibration pendant l'embrayage reancrait sur
+    une pose du guide calculee avec l'ANCIENNE calibration ; au message suivant, le bras
+    bougeait (13 cm de TCP pour +10 deg sur le zero de la base, guide immobile)."""
+    import yaml
+    n = TeleopCart()
+    try:
+        cal = charger()
+        msg = _message_guide(cal, Q0)
+        n.q = Q0.copy()
+        _cycles(n, msg, 3)
+        assert n._srv_embrayage(SetBool.Request(data=True), SetBool.Response()).success
+        _cycles(n, msg)
+        p0 = n._p_outil(n.q).copy()
+        # meme fichier, zero_urdf de la base decale de 10 deg
+        src = n._fichier_calib()
+        data = yaml.safe_load(open(src, encoding="utf-8"))
+        for e in data["joints"]:
+            if e["nom_urdf"] == "joint_1":
+                e["zero_urdf"] = float(e.get("zero_urdf", 0.0)) + math.radians(10)
+        tmp = tmp_path / "leader_calibration.yaml"
+        tmp.write_text(yaml.safe_dump(data), encoding="utf-8")
+        n._chemin, n._mtime = str(tmp), None
+        n._recharger_si_change()
+        assert n.cal.par_nom["joint_1"].zero_urdf != cal.par_nom["joint_1"].zero_urdf
+        _cycles(n, msg, 20)                           # guide IMMOBILE
+        assert n.embraye
+        assert float(np.linalg.norm(n._p_outil(n.q) - p0)) < 1e-3
+    finally:
+        n.destroy_node()
+
+
+def test_base_directe_sans_la_base_recopiee_ne_bouge_pas():
+    """Revue du 2026-09-13 : base_directe avec joint_1 hors des axes recopies mettait
+    l'ancre dans le plan du bras et la cible dans le monde : 6 cm des l'embrayage."""
+    n = TeleopCart()
+    try:
+        from rclpy.parameter import Parameter
+        assert n.set_parameters([Parameter("axes_directs", value=[5])])[0].successful
+        assert n.base_directe and n.directs == [4]
+        msg = _message_guide(charger(), Q0)
+        n.q = Q0.copy()
+        _cycles(n, msg, 3)
+        assert n._srv_embrayage(SetBool.Request(data=True), SetBool.Response()).success
+        p0 = n._p_outil(n.q).copy()
+        _cycles(n, msg, 30)
+        assert float(np.linalg.norm(n._p_outil(n.q) - p0)) < 1e-3
+    finally:
+        n.destroy_node()
+
+
+def test_vrai_bras_refuse_de_changer_les_axes_recopies_embraye(banc):
+    from rclpy.parameter import Parameter
+    assert embrayer(banc).success
+    r = banc.n.set_parameters([Parameter("axes_directs", value=[1, 5])])[0]
+    assert not r.successful and "debrayer" in r.reason
+
+
+def test_vrai_bras_debraye_si_la_calibration_change(banc):
+    banc.suivre = True
+    assert embrayer(banc).success
+    banc.n._mtime = -1.0                              # « fichier modifie »
+    banc.n._recharger_si_change()
+    assert not banc.n.embraye
+
+
 def test_bras_simule_muet_a_cote_d_un_vrai_robot():
     """BUG-008 : le noeud du bras SIMULE ne publie pas /joint_states si un autre
     publisher existe (joint_state_broadcaster du vrai robot)."""

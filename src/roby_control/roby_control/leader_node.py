@@ -296,16 +296,16 @@ class LeaderNode(Node):
         self.pub_recentrage = self.create_publisher(Bool, "/leader/recentrage", qos)
         self.pub_recentrage.publish(Bool(data=False))
         self.srv_maintien = self.create_service(
-            SetBool, "/leader/maintien", self._srv_maintien)
+            SetBool, "/leader/maintien", self._sur_bus(self._srv_maintien))
         self.srv_recentrer = self.create_service(
-            Trigger, "/leader/recentrer", self._srv_recentrer)
+            Trigger, "/leader/recentrer", self._sur_bus(self._srv_recentrer))
         self.srv_torque = self.create_service(
-            SetBool, "/leader/set_torque", self._srv_set_torque_all
+            SetBool, "/leader/set_torque", self._sur_bus(self._srv_set_torque_all)
         )
         self.srv_joint = [
             self.create_service(
                 SetBool, "/leader/%s/set_torque" % name,
-                functools.partial(self._srv_set_torque_one, sid),
+                self._sur_bus(functools.partial(self._srv_set_torque_one, sid)),
             )
             for sid, name in self.name_of.items()
         ]
@@ -366,7 +366,7 @@ class LeaderNode(Node):
 
         self.pub_joy = self.create_publisher(JointState, "/leader/joystick", 10)
         self.srv_joy = self.create_service(
-            SetBool, "/leader/joystick", self._srv_joystick)
+            SetBool, "/leader/joystick", self._sur_bus(self._srv_joystick))
         self.timer_joy = self.create_timer(
             1.0 / max(1.0, float(g("joystick_rate_hz").value)), self._tick_joystick)
         self.create_timer(
@@ -438,6 +438,37 @@ class LeaderNode(Node):
         self.pub_tel.publish(arr)
 
     # ------------------------------------------------------------------ services
+    def _sur_bus(self, service):
+        """Un service qui touche le bus ne doit jamais tuer le noeud.
+
+        Une lecture groupee ratee (un servo muet un instant) levait LeaderBusError hors
+        de tout try : rclpy la relance, le noeud s'arretait, /leader/joint_states se
+        taisait -- et /leader/recentrage restait a True. On coupe le couple (etat sur),
+        on remet les modes a zero et on repond « echec » (revue du 2026-09-13)."""
+        nom = getattr(service, "__name__", "service")
+
+        @functools.wraps(service)
+        def enveloppe(req, resp):
+            try:
+                return service(req, resp)
+            except LeaderBusError as e:
+                self.get_logger().error(
+                    "bus en echec pendant %s : %s -> couple COUPE par securite" % (nom, e))
+                self.maintien = False
+                self._maintien_tient = False
+                self.joy_actif = False
+                for action in (lambda: self.bus.set_torque(False),
+                               lambda: self.bus.set_torque_limit(TORQUE_LIMIT_MAX)):
+                    try:
+                        action()
+                    except LeaderBusError:
+                        pass
+                self.pub_recentrage.publish(Bool(data=False))
+                resp.success = False
+                resp.message = "bus en echec : %s ; couple coupe par securite" % e
+                return resp
+        return enveloppe
+
     def _srv_set_torque_all(self, req, resp):
         echecs = self.bus.set_torque(req.data)
         resp.success = not echecs

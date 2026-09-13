@@ -314,6 +314,10 @@ class TeleopReel(TeleopCart):
     def _motif_refus(self):
         if self.guide is None:
             return "aucune donnee du bras guide (leader_node lance ?)"
+        if self.dernier is not None:
+            age = (self.get_clock().now() - self.dernier).nanoseconds / 1e9
+            if age > self.timeout:
+                return "bras guide muet depuis %.1f s (leader_node ?)" % age
         if not self._js_frais():
             a = self._age_js()
             return ("pas de /joint_states du robot %s (stack lancee ?)"
@@ -427,6 +431,16 @@ class TeleopReel(TeleopCart):
         return (float(O._z_pick(float(x), float(y))) - self.marge_garde
                 + self.marge_plancher)
 
+    def _recharger_si_change(self):
+        """Calibration du guide modifiee pendant l'embrayage : on DEBRAYE d'abord.
+
+        Le noeud parent reancre proprement au message suivant ; sur le vrai bras on
+        prefere qu'un reglage de calibration ne soit JAMAIS applique en mouvement."""
+        m = self._mtime_calib()
+        if self.embraye and m is not None and m != self._mtime:
+            self._debrayer("calibration du guide modifiee : reembrayer apres le reglage")
+        super()._recharger_si_change()
+
     def _srv_pose_travail(self, req, resp):
         resp.success = False
         resp.message = ("interdit sur le vrai bras : la consigne sauterait loin du bras. "
@@ -441,6 +455,11 @@ class TeleopReel(TeleopCart):
                 return SetParametersResult(
                     successful=False,
                     reason="echelle %.3g > %.3g : plafond du vrai bras" % (p.value, cap))
+            if p.name in ("axes_directs", "base_directe") and self.embraye:
+                # Changent la facon dont le guide est exprime : sur le vrai bras, jamais
+                # a chaud (le noeud de simulation, lui, les applique au message suivant).
+                return SetParametersResult(
+                    successful=False, reason="%s : debrayer d'abord (vrai bras)" % p.name)
         return super()._sur_parametres(params)
 
     # ------------------------------------------------------------------ boucle

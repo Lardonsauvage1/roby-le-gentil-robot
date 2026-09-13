@@ -152,8 +152,14 @@ class TeleopCart(Node):
         self._diverge = False
         self._tcp_ancre = None
         self._verif_saut = 0
-        self._tcp_ancre = None
-        self._verif_saut = 0
+        # Reglages qui changent la FACON dont le guide est exprime (axes recopies, base
+        # directe, calibration) : appliques au PROCHAIN message du guide, avec le
+        # reancrage. Reancrer tout de suite posait l'ancre sur une pose du guide calculee
+        # avec l'ANCIEN reglage ; au message suivant, l'ecart devenait un vrai mouvement
+        # (13 cm de TCP pour +10 deg sur le zero de la base, guide immobile ; revue du
+        # 2026-09-13).
+        self._attente = {}
+        self._reancrer = False
 
         self.pub = (self.create_publisher(JointState, "/joint_states", 10)
                     if self.PUBLIE_JOINT_STATES else None)
@@ -221,6 +227,10 @@ class TeleopCart(Node):
             if j is None or j.nom_leader not in vus:
                 return
             angles.append(j.convertir(vus[j.nom_leader])[0])
+        if self._attente:
+            self.directs = self._attente.get("directs", self.directs)
+            self.base_directe = self._attente.get("base_directe", self.base_directe)
+            self._attente = {}
         T = fkT(angles)
         # PAS d'offset d'outil du cote guide. L'appliquer aussi ici lui allonge le bras
         # de levier : une rotation du poignet du guide se traduirait alors en 10 cm de
@@ -230,7 +240,7 @@ class TeleopCart(Node):
         p_out = T[:3, 3]
         self.guide_q1 = float(angles[0])
         self.guide_q = [float(a) for a in angles]
-        if self.base_directe:
+        if self._plan():
             # DANS LE PLAN DU BRAS. Quand la base est pilotee a part, la position de
             # reference doit etre exprimee APRES joint_1, sinon elle porte encore la
             # rotation de la base -- et comme le zero de la base est a -180 deg (guide
@@ -242,6 +252,19 @@ class TeleopCart(Node):
         else:
             self.guide = (p_out.copy(), T[:3, :3].copy())
         self.dernier = self.get_clock().now()
+        if self._reancrer:
+            self._reancrer = False
+            if self.embraye:
+                self._ancrer()
+
+    def _plan(self):
+        """Position du guide exprimee DANS LE PLAN DU BRAS (apres joint_1) ?
+
+        Seulement si la base est recopiee du guide : c'est la base reelle du robot qui
+        ramene ensuite la cible dans le monde (_tick). Avec base_directe mais joint_1
+        hors des axes recopies, l'ancre etait dans le plan et la cible jamais ramenee :
+        6 cm de mouvement des l'embrayage, guide immobile (revue du 2026-09-13)."""
+        return self.base_directe and 0 in self.directs
 
     def _cb_recentrage(self, msg):
         """Le guide rejoint sa pose de reference : on DEBRAYE.
@@ -315,7 +338,7 @@ class TeleopCart(Node):
         """Repose les deux ancres sur l'etat courant. C'est TOUT le debrayage, et c'est
         aussi ce qui rend le changement d'echelle sans a-coup."""
         self.ancre_guide = self.guide[0].copy()
-        if self.base_directe:
+        if self._plan():
             # Meme repere des deux cotes : l'ancre du robot est prise APRES joint_1.
             self.ancre_p = Rz(-float(self.q[0])) @ self._p_outil(self.q)
         else:
@@ -355,19 +378,25 @@ class TeleopCart(Node):
                 self.laisse = float(p.value)
                 self.get_logger().warn("laisse -> %.3f m" % self.laisse)
             elif p.name == "axes_directs":
-                self.directs = sorted({int(a) - 1 for a in p.value if 1 <= int(a) <= 5})
+                nouveaux = sorted({int(a) - 1 for a in p.value if 1 <= int(a) <= 5})
                 if self.embraye and self.guide is not None:
-                    self._ancrer()
+                    self._attente["directs"] = nouveaux     # au prochain message du guide
+                    self._reancrer = True
+                else:
+                    self.directs = nouveaux
                 self.get_logger().warn(
                     "axes recopies du guide : %s (reancre)"
-                    % (", ".join(J[i] for i in self.directs) or "aucun"))
+                    % (", ".join(J[i] for i in nouveaux) or "aucun"))
             elif p.name == "base_directe":
-                self.base_directe = bool(p.value)
+                nouvelle = bool(p.value)
                 if self.embraye and self.guide is not None:
-                    self._ancrer()
+                    self._attente["base_directe"] = nouvelle
+                    self._reancrer = True
+                else:
+                    self.base_directe = nouvelle
                 self.get_logger().warn(
                     "base %s (reancre)"
-                    % ("RECOPIEE directement du guide" if self.base_directe
+                    % ("RECOPIEE directement du guide" if nouvelle
                        else "resolue par l'IK"))
             elif p.name == "w_ori":
                 self.w_ori = float(p.value)
@@ -641,9 +670,10 @@ class TeleopCart(Node):
             return
         self.cal, self._mtime = cal, m
         # La reference du guide vient de changer : sans reancrage, le grand bras
-        # sauterait de l'ecart introduit par le reglage.
+        # sauterait de l'ecart introduit par le reglage. Reancrage au PROCHAIN message du
+        # guide, converti avec la NOUVELLE calibration (cf. self._attente).
         if self.embraye and self.guide is not None:
-            self._ancrer()
+            self._reancrer = True
         self.get_logger().warn(
             "calibration RECHARGEE (reancre) : %s"
             % ", ".join("%s zero_urdf %+.0f deg" % (j.nom_urdf,
