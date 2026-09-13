@@ -33,7 +33,9 @@ if not _BRUT and os.path.exists(_TUN):
 
 from picamera2 import Picamera2
 
-# Valeurs FIGEES par cote (a re-tuner au besoin). left=EXTERIEURE i2c@88000, right=POIGNET i2c@80000.
+# Valeurs FIGEES par cote (a re-tuner au besoin). left = camera du POIGNET (i2c@88000),
+# right = vue EXTERIEURE (i2c@80000) : verifie sur les images le 2026-09-13. (Ce commentaire
+# disait l'inverse ; les cotes ont change depuis juillet, cf. note du 2026-09-08.)
 CAMS = [
     dict(side="left",  cam="i2c@88000", rot180=False,  exposure=66640, gain=6.875, red=1.039, blue=1.616),
     dict(side="right", cam="i2c@80000", rot180=False, exposure=66640, gain=8.0,   red=1.25,  blue=2.4),
@@ -44,9 +46,10 @@ def pick(id_substr):
     """Index de la camera dont l'Id contient id_substr, ou None si absente.
 
     Avant (2026-07-20) : levait une exception, donc UNE camera debranchee empechait
-    le noeud de demarrer et privait de flux la camera SAINE. Or l'inference n'a
-    besoin que de la gauche : une nappe debranchee cote poignet bloquait tout le
-    deploiement pour rien. On saute desormais les absentes."""
+    le noeud de demarrer et privait de flux la camera SAINE. Or l'inference n'utilise
+    qu'UNE camera (ROBY_INFER_CAM ; 'right' = vue exterieure pour les modeles de
+    septembre 2026) : une nappe debranchee sur l'autre bloquait tout le deploiement
+    pour rien. On saute desormais les absentes."""
     for i, info in enumerate(Picamera2.global_camera_info()):
         if id_substr in info.get("Id", ""):
             return i
@@ -152,7 +155,8 @@ def main():
         except CameraAbsente as e:
             node.get_logger().warn(
                 f"camera '{c['side']}' ({e}) ABSENTE -> ignoree. "
-                f"L'inference n'a besoin que de 'left' ; l'enregistrement d'episodes, lui, "
+                f"L'inference n'utilise qu'une camera (ROBY_INFER_CAM, 'right' pour les modeles "
+                f"actuels) ; l'enregistrement d'episodes, lui, "
                 f"exige les DEUX et sera inutilisable.")
     if not cams:
         node.get_logger().error("AUCUNE camera disponible -> arret.")
