@@ -200,11 +200,11 @@ def main():
 
     def rafraichir():
         if n.etat_cart and len(n.etat_cart) >= 4:
-            k, emb, err, sig = n.etat_cart
-            suivi.set("echelle 1:%.3g   %s   ecart orientation %.1f deg   "
+            k, emb, ecart, sig = n.etat_cart
+            suivi.set("echelle 1:%.3g   %s   ecart poignet %.0f mm   "
                       "marge singularite %.3f"
                       % (1.0 / k if k else 0, "EMBRAYE" if emb > 0.5 else "debraye",
-                         err, sig))
+                         ecart, sig))
         age = None if n.t_garde is None else time.monotonic() - n.t_garde
         if n.garde is None or age is None or age > 2.0:
             garde.set("garde : absent (normal avec le bras simule seul, "

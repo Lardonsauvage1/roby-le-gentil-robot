@@ -272,7 +272,7 @@ def test_suit_le_guide_a_vitesse_plafonnee(banc):
     assert float((t[-1] - t[0])) > 0.3 / 0.4 * 0.8       # ~0,75 s, pas instantane
 
 
-def rejouer_guide(monkeypatch, omega=None):
+def rejouer_guide(monkeypatch):
     """Rejoue le geste ENREGISTRE du 2026-09-13, horloge simulee, faux robot parfait.
 
     Retourne (debrayages, plus grand pas articulaire par cycle)."""
@@ -288,8 +288,6 @@ def rejouer_guide(monkeypatch, omega=None):
     n = reel.TeleopReel()
     try:
         n.set_parameters([Parameter("echelle", value=float(d["echelle"]))])
-        if omega is not None:
-            n.omega_max = omega
         n._autres_emetteurs = lambda: 0
         n._maintenir = lambda: None
         n._envoyer = lambda t: None
@@ -322,19 +320,89 @@ def rejouer_guide(monkeypatch, omega=None):
 
 
 def test_geste_enregistre_ne_decroche_plus(monkeypatch):
-    """Cas du 2026-09-13 (echelle 1:10) : le guide incline a 40-75 deg/s. L'orientation
-    n'est pas reduite par l'echelle ; sans plafond sur la rotation demandee, l'IK
-    s'eloignait de la consigne bridee jusqu'au seuil de saut -- decrochage 4,5 s apres
-    l'embrayage, sans vrai saut."""
+    """Cas du 2026-09-13 (echelle 1:10) : le guide incline a 40-75 deg/s. Avec une IK qui
+    tenait aussi l'orientation, sa solution s'eloignait de la consigne bridee jusqu'au
+    seuil de saut -- decrochage 4,5 s apres l'embrayage, sans vrai saut. Le poignet est
+    maintenant RECOPIE (bride a vitesse_art_max) et l'IK ne place que son centre : la
+    cause a disparu, sans plafond de rotation."""
     debrayages, pas_max = rejouer_guide(monkeypatch)
     assert debrayages == 0
     assert pas_max < 0.4 * 0.02 + 1e-6
 
 
-def test_geste_enregistre_decrochait_sans_plafond_de_rotation(monkeypatch):
-    """Le test precedent a du sens : sans le plafond, le meme geste decroche."""
-    debrayages, _ = rejouer_guide(monkeypatch, omega=100.0)
-    assert debrayages >= 1
+# ------------------------------------------------------------------ centre du poignet
+def test_centre_du_poignet_ne_depend_ni_de_joint_4_ni_de_joint_5():
+    from roby_tool_pickup import fk_poignet, fkT
+    rng = np.random.default_rng(1)
+    for _ in range(200):
+        q = rng.uniform(-2.0, 2.0, 5)
+        q2 = q.copy()
+        q2[3:] = rng.uniform(-3.0, 3.0, 2)
+        assert np.allclose(fk_poignet(q2), fk_poignet(q), atol=1e-12)
+        # link_gripper est a 6 cm devant, le long de l'axe de l'outil
+        T = fkT(q)
+        assert np.allclose(T[:3, 3] - fk_poignet(q), T[:3, 0] * 0.06, atol=1e-12)
+
+
+def test_axes_du_poignet_toujours_recopies(banc):
+    from rclpy.parameter import Parameter
+    assert banc.n._recopies() == [0, 3, 4]
+    assert banc.n._actifs() == [1, 2]
+    # meme si on les retire des axes recopies : ils ne deplacent pas le point commande
+    banc.n.set_parameters([Parameter("axes_directs", value=[1])])
+    assert banc.n._recopies() == [0, 3, 4]
+    # base rendue a l'IK : elle rejoint joint_2 et joint_3
+    banc.n.set_parameters([Parameter("base_directe", value=False)])
+    assert banc.n._recopies() == [3, 4] and banc.n._actifs() == [0, 1, 2]
+
+
+def _poignet(m):
+    from roby_tool_pickup import fk_poignet
+    return fk_poignet(reel.vers_modele(m.points[-1].positions))
+
+
+def test_tourner_le_poignet_du_guide_ne_deplace_pas_le_centre(banc):
+    banc.suivre = True
+    assert embrayer(banc).success
+    p0 = _poignet(type("M", (), {"points": [type("P", (), {"positions": Q0})]}))
+    banc.vitesse_main = 0.3
+    banc.cible_guide = Q0 + np.array([0, 0, 0, 0.25, -0.30])  # la main tourne le poignet
+    banc.recues.clear()
+    assert banc.tourner(jusqua=lambda: banc.recues and np.allclose(
+        banc.recues[-1][1].points[-1].positions[3:], banc.cible_guide[3:], atol=1e-3),
+        max_s=4.0)
+    assert banc.n.embraye
+    for _, m in banc.recues:
+        assert np.linalg.norm(_poignet(m) - p0) < 1e-4      # le centre ne bouge pas
+        assert np.allclose(m.points[-1].positions[:3], Q0[:3], atol=1e-4)
+
+
+def test_ik_place_le_centre_du_poignet(banc):
+    """La main deplace son poignet : celui du robot suit, du meme deplacement a 1:1."""
+    from roby_tool_pickup import fk_poignet
+    banc.suivre = True
+    assert embrayer(banc).success
+    banc.vitesse_main = 0.3
+    banc.cible_guide = Q0 + np.array([0, -0.10, 0.10, 0, 0])   # pince 6,8 cm au-dessus
+    voulu = fk_poignet(banc.cible_guide)                    # k = 1, robot parti de Q0
+    banc.recues.clear()
+    banc.tourner(duree=4.0)
+    assert banc.n.embraye
+    assert np.linalg.norm(_poignet(banc.recues[-1][1]) - voulu) < 2e-3
+
+
+def test_poignet_a_1_1_meme_a_echelle_reduite(banc):
+    from rclpy.parameter import Parameter
+    banc.n.set_parameters([Parameter("echelle", value=0.5)])
+    banc.suivre = True
+    assert embrayer(banc).success
+    banc.vitesse_main = 0.3
+    banc.cible_guide = Q0 + np.array([0.20, 0, 0, 0, 0.20])
+    banc.recues.clear()
+    banc.tourner(duree=3.0)
+    q = np.asarray(banc.recues[-1][1].points[-1].positions)
+    assert q[0] - Q0[0] == pytest.approx(0.10, abs=2e-3)    # base : a l'echelle
+    assert q[4] - Q0[4] == pytest.approx(0.20, abs=2e-3)    # poignet : 1:1
 
 
 def _direction_descente(q):
@@ -480,7 +548,7 @@ def test_calibration_rechargee_embraye_ne_bouge_pas(tmp_path):
         _cycles(n, msg, 3)
         assert n._srv_embrayage(SetBool.Request(data=True), SetBool.Response()).success
         _cycles(n, msg)
-        p0 = n._p_outil(n.q).copy()
+        p0 = n._p_pince(n.q).copy()
         # meme fichier, zero_urdf de la base decale de 10 deg
         src = n._fichier_calib()
         data = yaml.safe_load(open(src, encoding="utf-8"))
@@ -494,7 +562,7 @@ def test_calibration_rechargee_embraye_ne_bouge_pas(tmp_path):
         assert n.cal.par_nom["joint_1"].zero_urdf != cal.par_nom["joint_1"].zero_urdf
         _cycles(n, msg, 20)                           # guide IMMOBILE
         assert n.embraye
-        assert float(np.linalg.norm(n._p_outil(n.q) - p0)) < 1e-3
+        assert float(np.linalg.norm(n._p_pince(n.q) - p0)) < 1e-3
     finally:
         n.destroy_node()
 
@@ -506,14 +574,15 @@ def test_base_directe_sans_la_base_recopiee_ne_bouge_pas():
     try:
         from rclpy.parameter import Parameter
         assert n.set_parameters([Parameter("axes_directs", value=[5])])[0].successful
-        assert n.base_directe and n.directs == [4]
+        # le poignet (joint_4, joint_5) est toujours recopie ; la base, elle, ne l'est pas
+        assert n.base_directe and n.directs == [3, 4] and n._actifs() == [0, 1, 2]
         msg = _message_guide(charger(), Q0)
         n.q = Q0.copy()
         _cycles(n, msg, 3)
         assert n._srv_embrayage(SetBool.Request(data=True), SetBool.Response()).success
-        p0 = n._p_outil(n.q).copy()
+        p0 = n._p_pince(n.q).copy()
         _cycles(n, msg, 30)
-        assert float(np.linalg.norm(n._p_outil(n.q) - p0)) < 1e-3
+        assert float(np.linalg.norm(n._p_pince(n.q) - p0)) < 1e-3
     finally:
         n.destroy_node()
 
@@ -562,18 +631,18 @@ def test_bras_simule_muet_a_cote_d_un_vrai_robot():
 
 
 def test_repere_bleu_au_point_commande():
-    """La boule bleue et la croix designent le meme point : bout de pince, offset
-    d'outil compris. Avant le 2026-09-13, la boule etait a link_gripper, 5 cm en
-    arriere, et la croix restait rouge meme avec un suivi parfait."""
+    """La boule bleue et la croix designent le meme point : le point COMMANDE, centre du
+    poignet depuis le 2026-09-15. Avant le 2026-09-13, la boule etait a un autre point
+    que la croix, et la croix restait rouge meme avec un suivi parfait."""
     n = TeleopCart()
     try:
-        n.cible_brute = n._p_outil(n.q)
+        n.cible_brute = n._p_poignet(n.q)
         publies = []
         n.pub_marq.publish = publies.append
         n._marqueurs()
         spheres = {m.id: m for m in publies[0].markers if m.id in (0, 1)}
         p = spheres[1].pose.position
-        assert np.allclose([p.x, p.y, p.z], n._p_outil(n.q))
+        assert np.allclose([p.x, p.y, p.z], n._p_poignet(n.q))
         assert spheres[0].color.g > 0.5                 # vert : suivi parfait
     finally:
         n.destroy_node()

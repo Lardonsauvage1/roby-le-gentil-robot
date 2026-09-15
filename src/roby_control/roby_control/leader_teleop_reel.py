@@ -27,13 +27,16 @@ Ce qui differe du bras simule, et pourquoi :
 - RETOUR EN LIBRE (US-023) : flux du guide perdu, /joint_states perdu, garde gele ou
   disparu, bras qui ne suit plus (derive), saut de consigne en un cycle (couture d'un axe
   qui fait le tour). Le suivi ne reprend jamais seul : il faut reembrayer.
-- PLAFONDS : vitesse cartesienne <= `vitesse_max_reel_m_s`, vitesse de rotation de
-  l'outil <= `vitesse_ori_max_rad_s` (l'orientation est recopiee a 1:1, l'echelle ne
-  la reduit pas), vitesse articulaire <= `vitesse_art_max_rad_s` (la base, recopiee du
-  guide, echappe a la limite cartesienne), echelle <= `echelle_max_reel`.
-- PLANCHER VIRTUEL : la cible ne descend pas sous le plancher du garde + `plancher_marge_m`
-  (meme point, meme formule que roby_guard ; +2,5 cm = 5 mm au-dessus de la table). Le bras glisse au ras de la table au lieu
-  de faire geler le garde ; le garde reste le dernier filet.
+- POINT COMMANDE = CENTRE DU POIGNET (2026-09-15, cf. leader_teleop_cart) : base et
+  poignet (joint_4, joint_5) recopies du guide, l'IK ne place que le centre du poignet.
+- PLAFONDS : vitesse cartesienne du centre du poignet <= `vitesse_max_reel_m_s`, vitesse
+  articulaire <= `vitesse_art_max_rad_s` -- y compris pour les axes RECOPIES (base, et
+  poignet qui oriente la pince a 1:1 quelle que soit l'echelle), brides en amont de
+  l'IK -- et echelle <= `echelle_max_reel`.
+- PLANCHER VIRTUEL, sur la PINCE : elle ne descend pas sous le plancher du garde +
+  `plancher_marge_m` (meme point link_gripper, meme formule que roby_guard ; +2,5 cm =
+  5 mm au-dessus de la table). Si elle y passerait, le centre du poignet remonte d'autant.
+  Le bras glisse au ras de la table au lieu de faire geler le garde, qui reste le filet.
 - Espace ROBOT vs MODELE : /joint_states et le garde parlent en consigne COMPENSEE
   (ROBY_J3_SCALE, meme convention que roby_infer_cart et roby_guard). L'IK travaille en
   espace modele. La conversion est faite a l'entree et a la sortie.
@@ -59,7 +62,7 @@ from std_msgs.msg import Float64MultiArray, String
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 from roby_control.leader_teleop_cart import J, TeleopCart
-from roby_tool_pickup import fkT, rotvec   # chemin ajoute par leader_teleop_cart
+from roby_tool_pickup import fkT   # chemin ajoute par leader_teleop_cart
 import roby_oracle as O                    # plancher : la meme fonction que le garde
 
 TOPIC_GARDE = "/guard/joint_trajectory"
@@ -87,16 +90,6 @@ def vers_robot(q, scale=None, ref=None):
     if scale > 0:
         q[2] = ref + (q[2] - ref) / scale
     return q
-
-
-def _rodrigues(rv):
-    """Vecteur rotation -> matrice."""
-    a = float(np.linalg.norm(rv))
-    if a < 1e-12:
-        return np.eye(3)
-    k = np.asarray(rv, float) / a
-    K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
-    return np.eye(3) + math.sin(a) * K + (1 - math.cos(a)) * (K @ K)
 
 
 def _enrouler(a):
@@ -167,7 +160,6 @@ class TeleopReel(TeleopCart):
         self.declare_parameter("duree_derive_s", 0.5)
         self.declare_parameter("saut_max_rad", 0.10)
         self.declare_parameter("vitesse_art_max_rad_s", 0.4)
-        self.declare_parameter("vitesse_ori_max_rad_s", 0.4)
         # Plancher virtuel (2026-09-13) : sans lui, l'IK emmenait la pince sous le
         # plancher du garde, qui gelait ; apres rearmement le bras etait encore a 1 mm
         # de la limite et regelait au moindre geste. `plancher_marge_garde_m` doit
@@ -189,7 +181,6 @@ class TeleopReel(TeleopCart):
         self.duree_derive = float(g("duree_derive_s").value)
         self.saut_max = float(g("saut_max_rad").value)
         self.vart = float(g("vitesse_art_max_rad_s").value)
-        self.omega_max = float(g("vitesse_ori_max_rad_s").value)
         self.plancher_virtuel = bool(g("plancher_virtuel").value)
         self.marge_garde = float(g("plancher_marge_garde_m").value)
         self.marge_plancher = float(g("plancher_marge_m").value)
@@ -253,23 +244,24 @@ class TeleopReel(TeleopCart):
         self.t_mes = time.monotonic()
 
     def _cb(self, msg):
-        """Pose du guide, puis bridage des axes RECOPIES (la base) a `vitesse_art_max`.
+        """Pose du guide, puis bridage des axes RECOPIES a `vitesse_art_max`.
 
-        La limite cartesienne ne voit pas ces axes : sans bridage, une main rapide
-        ferait tourner la base du vrai bras a sa vitesse. On bride l'angle du GUIDE
+        La limite cartesienne ne voit pas ces axes (base, poignet) : sans bridage, une
+        main rapide ferait tourner le vrai bras a sa vitesse. On bride l'angle du GUIDE
         tel que le voit le calcul, avant l'IK : la base et le coude restent calcules
         ensemble. Un saut brut du codeur du guide, impossible a la main, fait debrayer.
         """
         super()._cb(msg)
-        if self.guide_q is None or not self.directs:
+        recopies = self._recopies()
+        if self.guide_q is None or not recopies:
             return
         t = time.monotonic()
-        brut = {i: self.guide_q[i] for i in self.directs}
+        brut = {i: self.guide_q[i] for i in recopies}
         if self._g_brut is not None and self.embraye and self._t_cb is not None:
             # 5 rad/s : hors de portee d'une main ; 0,3 rad minimum pour tolerer un
             # message perdu.
             seuil = max(3 * self.saut_max, 5.0 * (t - self._t_cb))
-            for i in self.directs:
+            for i in recopies:
                 dd = abs(_enrouler(brut[i] - self._g_brut.get(i, brut[i])))
                 if dd > seuil:
                     self._debrayer("le codeur du guide %s a saute de %.2f rad en un message"
@@ -278,13 +270,14 @@ class TeleopReel(TeleopCart):
         if not self.embraye or self._g_lim is None or self._t_cb is None:
             self._g_lim = dict(brut)
         else:
-            pas = self.vart / max(abs(self.k), 1e-3) * (t - self._t_cb)
-            for i in self.directs:
+            for i in recopies:
+                # Bride sur l'angle du ROBOT : un degre de guide en donne echelle_axe.
+                pas = self.vart / max(abs(self._echelle_axe(i)), 1e-3) * (t - self._t_cb)
                 prec = self._g_lim.get(i, brut[i])
                 dd = _enrouler(brut[i] - prec)
                 self._g_lim[i] = _enrouler(prec + max(-pas, min(pas, dd)))
         self._t_cb = t
-        for i in self.directs:
+        for i in recopies:
             self.guide_q[i] = self._g_lim[i]
 
     def _cb_garde(self, msg):
@@ -381,53 +374,49 @@ class TeleopReel(TeleopCart):
         # un saut du guide.
         self._prec_directs = {}
 
-    def _dls_base_figee(self, j, target_p, target_R, iters=8):
-        """IK du bras simule, avec la vitesse de ROTATION demandee plafonnee.
+    def _ik_poignet(self, j, cible, iters=8):
+        """IK du centre du poignet, puis PLANCHER VIRTUEL sur la PINCE.
 
-        La position est deja bridee (cible <= vitesse_max * dt de la pince), mais pas
-        l'orientation : elle est recopiee du guide a 1:1, quelle que soit l'echelle. Le
-        2026-09-13 au banc (echelle 1:10), la main inclinait le guide a 40-75 deg/s ;
-        le plafond articulaire laissait alors la solution de l'IK s'eloigner un peu plus
-        a chaque cycle de la consigne bridee, jusqu'au seuil de saut -- debrayage sans
-        vrai saut. Bridee ici, la cible reste a portee du bras : il suit avec retard et
-        rattrape, rien n'est perdu (l'orientation est incrementale depuis l'ancre).
+        Le garde protege link_gripper (z_pick(x, y) - marge) ; la teleop s'arrete
+        `plancher_marge_m` plus haut. La cible est le centre du POIGNET, mais c'est la
+        PINCE qui descend vers la table -- et le poignet recopie peut la pencher vers le
+        bas sans que le centre bouge. On resout donc, on regarde ou arrive la pince, et
+        si elle passe sous la borne on remonte la cible du poignet d'autant : la pince
+        remonte de la meme quantite, son orientation etant fixee par les axes recopies.
+        Jamais au-dessus de la hauteur ACTUELLE de la pince : le plancher empeche de
+        descendre, il ne souleve pas le bras tout seul.
         """
-        R_act = fkT(np.asarray(j, float))[:3, :3]
-        rv = rotvec(R_act.T @ target_R)
-        a = float(np.linalg.norm(rv))
-        amax = self.omega_max * self.dt
-        if a > amax:
-            R_lim = R_act @ _rodrigues(rv * (amax / a))
-            # Le point COMMANDE (bout de pince) ne doit pas bouger pour autant :
-            # link_gripper est recalcule pour l'orientation bridee.
-            off = np.array([self.off, 0.0, 0.0])
-            target_p = target_p + (target_R - R_lim) @ off
-            target_R = R_lim
-        if self.plancher_virtuel:
-            # PLANCHER, meme point et meme formule que le garde (link_gripper,
-            # z_pick(x, y) - marge), avec `plancher_marge_m` de mieux. Jamais au-dessus
-            # de la hauteur actuelle : le plancher empeche de descendre, il ne souleve
-            # pas le bras tout seul.
-            borne = min(self._z_plancher(target_p[0], target_p[1]),
-                        float(fkT(np.asarray(j, float))[2, 3]))
-            if target_p[2] < borne:
-                dz = borne - float(target_p[2])
-                target_p = np.array(target_p, float)
-                target_p[2] = borne
-                # L'ancre remonte d'autant (z ne depend pas de la rotation de base) :
-                # le geste sous le plancher est perdu, comme au-dela de la laisse.
-                # Sans cela, la main devait remonter de toute la profondeur enfoncee
-                # (jusqu'a la laisse, 6 cm) avant que le bras ne decolle.
-                if self.ancre_p is not None:
-                    self.ancre_p = np.array(self.ancre_p, float)
-                    self.ancre_p[2] += dz
-                if not self._au_plancher:
-                    self._au_plancher = True
-                    self.get_logger().info("plancher virtuel : le bras glisse au ras de "
-                                           "la table (%.3f m)" % borne)
-            else:
-                self._au_plancher = False
-        return super()._dls_base_figee(j, target_p, target_R, iters)
+        q = super()._ik_poignet(j, cible, iters)
+        if not self.plancher_virtuel:
+            return q
+        z_actuel = float(self._p_pince(self.q)[2])
+        cible = np.array(cible, float)
+        remonte = 0.0
+        for _ in range(3):             # la pince suit le poignet a quelques 1e-4 m pres
+            p = self._p_pince(q)
+            borne = min(self._z_plancher(p[0], p[1]), z_actuel)
+            dz = borne - float(p[2])
+            if dz <= 1e-4:
+                break
+            cible[2] += dz
+            remonte += dz
+            q = super()._ik_poignet(j, cible, iters)
+        if remonte > 0.0:
+            # L'ancre remonte d'autant (z ne depend pas de la rotation de base) : le
+            # geste sous le plancher est perdu, comme au-dela de la laisse. Sans cela,
+            # la main devait remonter de toute la profondeur enfoncee (jusqu'a la
+            # laisse, 6 cm) avant que le bras ne decolle.
+            if self.ancre_p is not None:
+                self.ancre_p = np.array(self.ancre_p, float)
+                self.ancre_p[2] += remonte
+            if not self._au_plancher:
+                self._au_plancher = True
+                p = self._p_pince(q)
+                self.get_logger().info("plancher virtuel : la pince glisse au ras de la "
+                                       "table (%.3f m)" % float(p[2]))
+        else:
+            self._au_plancher = False
+        return q
 
     def _z_plancher(self, x, y):
         """Hauteur mini de link_gripper imposee par la teleop."""
@@ -500,7 +489,7 @@ class TeleopReel(TeleopCart):
         # (plafond de vitesse) : on compare donc la cible a la cible precedente, sinon
         # une main simplement rapide ferait debrayer.
         saut = np.abs(d)
-        for i in self.directs:
+        for i in self._recopies():
             prec = self._prec_directs.get(i)
             saut[i] = 0.0 if prec is None else abs(q_new[i] - prec)
             self._prec_directs[i] = float(q_new[i])
@@ -540,12 +529,15 @@ class TeleopReel(TeleopCart):
         self._n_envois += 1
 
     def _surveiller_derive(self, t):
-        """Le bras doit etre la ou etait la consigne `horizon_s` plus tot."""
+        """Le bras doit etre la ou etait la consigne `horizon_s` plus tot.
+
+        Mesure sur la PINCE (link_gripper) et non sur le centre du poignet : elle porte
+        aussi les ecarts du poignet recopie."""
         q_mes = vers_modele(self.q_mes)
-        p_mes = self._p_outil(q_mes)
-        ecart = float(np.linalg.norm(p_mes - self._p_outil(interp_hist(self.hist,
+        p_mes = self._p_pince(q_mes)
+        ecart = float(np.linalg.norm(p_mes - self._p_pince(interp_hist(self.hist,
                                                                        t - self.horizon_s))))
-        ecart_der = float(np.linalg.norm(p_mes - self._p_outil(self.q)))
+        ecart_der = float(np.linalg.norm(p_mes - self._p_pince(self.q)))
         self._ecarts.append(ecart)
         m = Float64MultiArray()
         m.data = [1000 * ecart, 1000 * ecart_der, 1000 * (self._age_js() or 0),

@@ -13,10 +13,16 @@ Debrayage : a 1:5, l'espace du guide ne couvre plus qu'un cinquieme de celui de 
 On relache, on ramene le guide au centre, on reembraye -- comme on souleve une souris.
 Sans lui, les petits rapports sont inutilisables.
 
-Orientation : Roby a 5 axes, donc 5 degres de liberte, alors que position (3) et
-orientation (3) en demandent 6. Il en manque un, structurellement. `w_ori` arbitre :
-bas = la position passe d'abord, l'orientation suit du mieux qu'elle peut. L'ecart
-d'orientation restant est MESURE et publie -- un suivi qui ne suit plus doit se voir.
+POINT COMMANDE = CENTRE DU POIGNET (Niels, 2026-09-15). Roby a 5 axes pour un probleme
+qui en demande 6 : position et orientation de la pince ne peuvent pas etre tenues
+ensemble. On les DECOUPLE, comme sur un bras industriel a poignet : la base et les deux
+axes du poignet (joint_4, joint_5) sont RECOPIES du bras guide, et l'IK ne place que le
+centre du poignet (origine de joint_5), avec joint_2 et joint_3. Ce centre ne dependant
+ni de joint_4 ni de joint_5, tourner le poignet du guide ne deplace plus la cible : il
+oriente la pince autour d'un point fixe. Il reste 2 axes pour 2 coordonnees dans le plan
+du bras -- un probleme bien pose, singulier seulement coude tendu ou replie a fond.
+Avant, l'IK placait un point de la pince (11 cm devant joint_5) avec 4 axes et une
+orientation faiblement ponderee : le poignet se tordait pour aider la position.
 
 Ce noeud n'anime que le modele. Aucun message vers le vrai bras.
 
@@ -40,10 +46,15 @@ from std_srvs.srv import SetBool, Trigger
 from roby_control.leader_mapping import charger
 from roby_control.sim_joint_states import GardeJointStates
 
-sys.path.insert(0, os.path.expanduser("~/ros2_ws/tools/pc"))
-from roby_tool_pickup import LIMITS, Rz, dls, fkT, jac, rotvec   # noqa: E402
+# tools/pc de la MEME copie du depot que ce fichier (paquet installe en --symlink-install :
+# le chemin reel est dans src/). Repli sur le depot en service sinon.
+_TOOLS = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..", "tools", "pc")
+sys.path.insert(0, os.path.normpath(_TOOLS) if os.path.isdir(_TOOLS)
+                else os.path.expanduser("~/ros2_ws/tools/pc"))
+from roby_tool_pickup import LIMITS, Rz, fk_poignet, fkT   # noqa: E402
 
 J = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
+POIGNET = (3, 4)      # joint_4, joint_5 : TOUJOURS recopies (ils ne deplacent pas le point)
 
 # Pose de travail du reseau BC, mesuree sur le vrai robot (TCP a z = 0,33 m).
 POSE_TRAVAIL = [-0.2991, 0.8560, -0.4835, -0.0492, 1.3045]
@@ -59,11 +70,6 @@ class TeleopCart(Node):
     def __init__(self):
         super().__init__("leader_teleop_cart")
         self.declare_parameter("echelle", 1.0)
-        # POSITION PRIORITAIRE (choix de Sam, 2026-09-09). Roby a 5 axes pour un
-        # probleme qui en demande 6 : quelque chose doit ceder, et c'est l'orientation.
-        # Une petite valeur plutot que zero : a zero exact le solveur ne tient plus du
-        # tout l'orientation et le poignet peut partir n'importe ou.
-        self.declare_parameter("w_ori", 0.05)
         self.declare_parameter("publish_rate_hz", 50.0)
         self.declare_parameter("timeout_s", 0.5)
         self.declare_parameter("vitesse_max_m_s", 0.25)
@@ -91,23 +97,14 @@ class TeleopCart(Node):
         # reste 4 axes pour 3 positions + orientation au mieux, au lieu de 5 pour 6.
         self.declare_parameter("base_directe", True)
         # Axes RECOPIES du guide au lieu d'etre resolus par l'IK, numerotes 1..5.
-        # Chacun retire une inconnue au solveur ET une demande : un axe recopie devient
-        # previsible (un degre de guide = k degres de robot, toujours), et l'IK n'a plus
-        # a arbitrer pour lui. Avec [1, 5] il reste 3 axes pour 3 positions.
-        # [1] seulement : figer aussi joint_5 creait une quasi-singularite permanente
-        # (il ne restait que 2 et 3, tous deux autour du meme Y, plus 4 qui est un
-        # roulis et ne deplace presque pas le TCP) -- d'ou le manque d'autorite
-        # verticale. Valide avec Sam le 2026-09-09.
-        self.declare_parameter("axes_directs", [1])
-        # POINT DE COMMANDE, en metres le long de l'axe de l'outil depuis link_gripper.
-        # fkT() s'arrete a link_gripper ; le bout de pince (frame `tcp`) est 10 cm plus
-        # loin. Sans cet offset, l'operateur place la croix sur un objet alors que le
-        # point reellement commande est 10 cm en arriere -- decalage constant constate
-        # le 2026-09-09. Mettre 0.0 pour revenir au point de commande historique du
-        # projet (link_gripper), celui qu'utilisent l'oracle et roby_tool_pickup.
-        # 0,05 = milieu de la boite de la pince, le repere le plus naturel pour
-        # attraper quelque chose. Reglage retenu le 2026-09-09.
-        self.declare_parameter("offset_tcp_m", 0.05)
+        # joint_4 et joint_5 le sont TOUJOURS (ajoutes d'office) : ils ne deplacent pas le
+        # centre du poignet, l'IK ne pourrait rien en faire. La base (1) est au choix :
+        # recopiee, l'IK place le poignet dans le plan du bras avec joint_2 et joint_3 ;
+        # retiree, elle rejoint l'IK, qui place alors le poignet en 3D avec joint_1..3.
+        # Le 2026-09-09, figer joint_5 creait une quasi-singularite : la cible etait
+        # alors un point de la PINCE, que joint_2/3 ne placent pas seuls. Elle ne l'est
+        # plus -- c'est le centre du poignet, que joint_2/3 placent exactement.
+        self.declare_parameter("axes_directs", [1, 4, 5])
         # LAISSE : distance maximale entre la cible demandee et le TCP reellement
         # atteint. Sans elle, un bras bloque (butee, singularite) laisse la commande
         # INTEGRER indefiniment le geste : constate le 2026-09-09, joint_3 en butee et
@@ -121,16 +118,12 @@ class TeleopCart(Node):
         self.cal = charger(self._chemin)
         self._mtime = self._mtime_calib()
         self.k = float(self.get_parameter("echelle").value)
-        self.w_ori = float(self.get_parameter("w_ori").value)
         self.timeout = float(self.get_parameter("timeout_s").value)
         self.vmax = float(self.get_parameter("vitesse_max_m_s").value)
         self.seuil_sing = float(self.get_parameter("seuil_singularite").value)
         self.base_directe = bool(self.get_parameter("base_directe").value)
-        self.off = float(self.get_parameter("offset_tcp_m").value)
         self.laisse = float(self.get_parameter("laisse_m").value)
-        self.directs = sorted({int(a) - 1 for a in
-                               self.get_parameter("axes_directs").value
-                               if 1 <= int(a) <= 5})
+        self.directs = self._lire_directs(self.get_parameter("axes_directs").value)
 
         self.q = np.array([0.0, 0.25, -1.175, 0.0, 0.0])   # pose simulee courante
         self.guide = None            # (p, R) du guide, derniere lecture
@@ -142,8 +135,6 @@ class TeleopCart(Node):
         self.ancre_p = None
         self.ancre_q1_guide = None
         self.ancre_q1_roby = None
-        self.ancre_R_guide = None
-        self.ancre_R_roby = None
         self.ancre_aff = None
         self.dernier = None
         self.embraye = bool(self.get_parameter("embraye_au_demarrage").value)
@@ -199,20 +190,48 @@ class TeleopCart(Node):
         # 2026-09-09 : trois offsets appliques d'affilee, aucun effet visible.
         self.create_timer(0.5, self._recharger_si_change)
         self.get_logger().info(
-            "Teleop CARTESIENNE prete : echelle 1:%.3g, w_ori %.2f, %.0f Hz. "
-            "%s. %s"
-            % (1.0 / self.k if self.k else 0, self.w_ori, hz,
+            "Teleop CARTESIENNE prete : echelle 1:%.3g, point commande = CENTRE DU "
+            "POIGNET, axes recopies %s, %.0f Hz. %s. %s"
+            % (1.0 / self.k if self.k else 0, [J[i] for i in self.directs], hz,
                "EMBRAYE" if self.embraye else "DEBRAYE (embrayer pour piloter)",
                self.MSG_SORTIE))
 
+    # ------------------------------------------------------------------ geometrie
+    @staticmethod
+    def _lire_directs(valeur):
+        """Axes recopies (indices 0..4) : ceux demandes (numerotes 1..5) + le poignet."""
+        return sorted({int(a) - 1 for a in valeur if 1 <= int(a) <= 5} | set(POIGNET))
+
+    def _echelle_axe(self, i):
+        """Rapport guide -> robot d'un axe RECOPIE. La base suit l'echelle : elle deplace
+        le poignet lateralement, comme une translation. Le poignet reste a 1:1 : il
+        oriente la pince, et l'orientation n'etait deja pas reduite par l'echelle."""
+        return self.k if i == 0 else 1.0
+
+    def _p_poignet(self, q):
+        """POINT COMMANDE : centre du poignet (origine de joint_5)."""
+        return fk_poignet(q)
+
+    def _p_pince(self, q):
+        """link_gripper : le point que protege le garde (plancher), et celui ou l'on
+        mesure saut et derive -- il porte aussi les erreurs du poignet."""
+        return fkT(q)[:3, 3]
+
+    def _jac_poignet(self, q, axes, eps=1e-6):
+        """Jacobienne en position du centre du poignet, colonnes `axes` (3 x n). Celles
+        de joint_4 et joint_5 seraient nulles par construction."""
+        q = np.asarray(q, float)
+        p0, Jm = fk_poignet(q), np.zeros((3, len(axes)))
+        for c, i in enumerate(axes):
+            dq = np.zeros(len(J))
+            dq[i] = eps
+            Jm[:, c] = (fk_poignet(q + dq) - p0) / eps
+        return Jm
+
     # ------------------------------------------------------------------ entrees
-    def _p_outil(self, q):
-        """Position du POINT DE COMMANDE : link_gripper decale de `off` sur son axe x."""
-        T = fkT(q)
-        return T[:3, 3] + T[:3, :3] @ np.array([self.off, 0.0, 0.0])
 
     def _cb(self, msg):
-        """Pose du guide -> (position, rotation) dans le repere de Roby.
+        """Pose du guide -> position de SON centre de poignet, dans le repere de Roby.
 
         Source PROVISOIRE : angles guide -> angles Roby -> FK de Roby. Elle ne demande
         aucune mesure, mais le geste n'est pas geometriquement fidele -- 10 cm de main
@@ -231,13 +250,9 @@ class TeleopCart(Node):
             self.directs = self._attente.get("directs", self.directs)
             self.base_directe = self._attente.get("base_directe", self.base_directe)
             self._attente = {}
-        T = fkT(angles)
-        # PAS d'offset d'outil du cote guide. L'appliquer aussi ici lui allonge le bras
-        # de levier : une rotation du poignet du guide se traduirait alors en 10 cm de
-        # translation demandee, et le tremblement de la main serait amplifie d'autant.
-        # Le decalage n'a de sens que sur le point de commande du ROBOT ; la reference
-        # du guide n'est qu'un parametrage, et sa constante est absorbee par l'ancre.
-        p_out = T[:3, 3]
+        # MEME point des deux cotes : le centre du poignet. Le poignet du guide peut
+        # tourner sans deplacer la reference -- il n'oriente que la pince.
+        p_poignet = fk_poignet(angles)
         self.guide_q1 = float(angles[0])
         self.guide_q = [float(a) for a in angles]
         if self._plan():
@@ -247,10 +262,9 @@ class TeleopCart(Node):
             # monte a l'envers), le repere de reference est retourne d'un demi-tour
             # alors que la base, elle, est forcee ailleurs. Les deux se contredisent et
             # TOUS LES AXES paraissent inverses. Vecu le 2026-09-09.
-            Rmb = Rz(-self.guide_q1)
-            self.guide = (Rmb @ p_out, Rmb @ T[:3, :3])
+            self.guide = Rz(-self.guide_q1) @ p_poignet
         else:
-            self.guide = (p_out.copy(), T[:3, :3].copy())
+            self.guide = p_poignet.copy()
         self.dernier = self.get_clock().now()
         if self._reancrer:
             self._reancrer = False
@@ -264,7 +278,12 @@ class TeleopCart(Node):
         ramene ensuite la cible dans le monde (_tick). Avec base_directe mais joint_1
         hors des axes recopies, l'ancre etait dans le plan et la cible jamais ramenee :
         6 cm de mouvement des l'embrayage, guide immobile (revue du 2026-09-13)."""
-        return self.base_directe and 0 in self.directs
+        return 0 in self._recopies()
+
+    def _recopies(self):
+        """Axes EFFECTIVEMENT recopies du guide (indices). La base n'en fait partie que
+        si `base_directe` ; le poignet, toujours. Tout le reste est a l'IK."""
+        return [i for i in self.directs if i != 0 or self.base_directe]
 
     def _cb_recentrage(self, msg):
         """Le guide rejoint sa pose de reference : on DEBRAYE.
@@ -295,7 +314,7 @@ class TeleopCart(Node):
                 resp.message = "aucune donnee du guide : embrayage refuse"
                 return resp
             self._ancrer()
-            self._tcp_ancre = self._p_outil(self.q).copy()
+            self._tcp_ancre = self._p_pince(self.q).copy()
             self._verif_saut = 12          # on surveille les 12 premiers cycles
             self.embraye = True
             resp.message = ("EMBRAYE a l'echelle 1:%.3g — les deux ancres sont posees, "
@@ -327,9 +346,9 @@ class TeleopCart(Node):
         self._publie = {}
         self.cible_brute = None
         self.cible_monde = None
-        p = self._p_outil(self.q)
+        p = self._p_poignet(self.q)
         resp.success = True
-        resp.message = ("bras place en pose de travail, TCP a z = %.3f m "
+        resp.message = ("bras place en pose de travail, centre du poignet a z = %.3f m "
                         "(embrayez pour reprendre)" % p[2])
         self.get_logger().warn("/teleop_cart/pose_travail -> %s" % resp.message)
         return resp
@@ -337,31 +356,25 @@ class TeleopCart(Node):
     def _ancrer(self):
         """Repose les deux ancres sur l'etat courant. C'est TOUT le debrayage, et c'est
         aussi ce qui rend le changement d'echelle sans a-coup."""
-        self.ancre_guide = self.guide[0].copy()
+        self.ancre_guide = self.guide.copy()
         if self._plan():
             # Meme repere des deux cotes : l'ancre du robot est prise APRES joint_1.
-            self.ancre_p = Rz(-float(self.q[0])) @ self._p_outil(self.q)
+            self.ancre_p = Rz(-float(self.q[0])) @ self._p_poignet(self.q)
         else:
-            self.ancre_p = self._p_outil(self.q).copy()
+            self.ancre_p = self._p_poignet(self.q).copy()
         self.ancre_q1_guide = self.guide_q1
         self.ancre_q1_roby = float(self.q[0])
-        # ORIENTATION ancree, comme la position. Sans cela elle reste ABSOLUE : tourner
-        # le poignet du guide pendant un debrayage fait sauter le bras des qu'on
-        # reembraye, puisque l'IK se met a rattraper une orientation qui a change sans
-        # lui. Mesure du 2026-09-09 : 10,4 mm de saut sur un debrayage ordinaire.
         # DEUXIEME ANCRE, pour l'AFFICHAGE seulement. Celle de commande est deplacee
         # par la laisse pour empecher la divergence ; celle-ci ne bouge jamais entre
         # deux ancrages. La croix montre donc ou la MAIN demande, pas ou le bras a
         # bien voulu aller -- sans quoi elle reste collee au bras et ne signale plus
         # rien. Les deux besoins sont contradictoires avec une seule ancre.
         self.ancre_aff = self.ancre_p.copy()
-        self.ancre_R_guide = self.guide[1].copy()
-        T = fkT(self.q)
-        self.ancre_R_roby = (Rz(-float(self.q[0])) @ T[:3, :3] if
-                             (self.base_directe and 0 in self.directs)
-                             else T[:3, :3].copy())
-        self.ancre_qg = {i: self.guide_q[i] for i in self.directs}
-        self.ancre_qr = {i: float(self.q[i]) for i in self.directs}
+        # Axes recopies (base, poignet) ancres eux aussi : INCREMENTAUX depuis
+        # l'embrayage. Absolus, tourner le poignet du guide pendant un debrayage ferait
+        # sauter le bras a l'embrayage suivant (10,4 mm mesures le 2026-09-09).
+        self.ancre_qg = {i: self.guide_q[i] for i in self._recopies()}
+        self.ancre_qr = {i: float(self.q[i]) for i in self._recopies()}
 
     def _sur_parametres(self, params):
         from rcl_interfaces.msg import SetParametersResult
@@ -378,7 +391,7 @@ class TeleopCart(Node):
                 self.laisse = float(p.value)
                 self.get_logger().warn("laisse -> %.3f m" % self.laisse)
             elif p.name == "axes_directs":
-                nouveaux = sorted({int(a) - 1 for a in p.value if 1 <= int(a) <= 5})
+                nouveaux = self._lire_directs(p.value)
                 if self.embraye and self.guide is not None:
                     self._attente["directs"] = nouveaux     # au prochain message du guide
                     self._reancrer = True
@@ -398,9 +411,6 @@ class TeleopCart(Node):
                     "base %s (reancre)"
                     % ("RECOPIEE directement du guide" if nouvelle
                        else "resolue par l'IK"))
-            elif p.name == "w_ori":
-                self.w_ori = float(p.value)
-                self.get_logger().warn("w_ori -> %.2f" % self.w_ori)
         return SetParametersResult(successful=True)
 
     # ------------------------------------------------------------------ boucle
@@ -415,35 +425,33 @@ class TeleopCart(Node):
                 self._publier()
                 return
         if self.embraye and self.ancre_guide is not None and not self.recentrage:
-            p_guide, R_guide = self.guide
+            p_guide = self.guide
             cible = self.ancre_p + self.k * (p_guide - self.ancre_guide)
-            if self.ancre_R_guide is not None:
-                # Orientation INCREMENTALE : on applique au robot la rotation que le
-                # guide a subie depuis l'ancrage, et non son orientation absolue.
-                R_guide = self.ancre_R_roby @ (self.ancre_R_guide.T @ R_guide)
 
+            # Axes RECOPIES d'abord : ils fixent la base (donc le plan du bras) et
+            # l'orientation de la pince ; l'IK travaille ensuite a axes recopies figes.
             depart = np.array(self.q, float)
-            if self.base_directe and self.ancre_qg:
-                for i in self.directs:
-                    # Ecart deroule dans [-pi, pi] : les axes du guide franchissent la
-                    # couture de leur codeur, une soustraction brute y donnerait
-                    # presque un tour.
-                    d = (self.guide_q[i] - self.ancre_qg[i] + math.pi) % (2 * math.pi) \
-                        - math.pi
-                    qi = self.ancre_qr[i] + self.k * d
-                    lo, hi = LIMITS[J[i]]
-                    qi = (qi + math.pi) % (2.0 * math.pi) - math.pi
-                    depart[i] = min(hi, max(lo, qi))
+            for i in self._recopies():
+                if i not in self.ancre_qg:
+                    continue
+                # Ecart deroule dans [-pi, pi] : les axes du guide franchissent la
+                # couture de leur codeur, une soustraction brute y donnerait
+                # presque un tour.
+                d = (self.guide_q[i] - self.ancre_qg[i] + math.pi) % (2 * math.pi) \
+                    - math.pi
+                qi = self.ancre_qr[i] + self._echelle_axe(i) * d
+                lo, hi = LIMITS[J[i]]
+                qi = (qi + math.pi) % (2.0 * math.pi) - math.pi
+                depart[i] = min(hi, max(lo, qi))
+            if self._plan():
                 # La cible, calculee dans le plan, revient dans le monde par la base
                 # REELLE du robot -- celle qu'on vient de fixer.
-                if 0 in self.directs:
-                    # La cible, calculee dans le plan, revient dans le monde par la base
-                    # REELLE du robot -- celle qu'on vient de fixer.
-                    Rb = Rz(depart[0])
-                    cible = Rb @ cible
-                    R_guide = Rb @ R_guide
+                cible = Rz(depart[0]) @ cible
 
-            actuel = self._p_outil(self.q)
+            # Point ACTUEL pris avec les axes recopies deja appliques : la laisse et la
+            # limite de vitesse ne portent que sur ce que l'IK doit accomplir. La base a
+            # sa propre bride (vitesse articulaire) ; le poignet ne deplace pas ce point.
+            actuel = self._p_poignet(depart)
 
             # LAISSE. Si le bras ne suit pas, on ne laisse pas l'ecart grandir : on
             # deplace l'ANCRE pour absorber l'exces. Le geste au-dela de la laisse est
@@ -452,7 +460,7 @@ class TeleopCart(Node):
             # Cible d'AFFICHAGE : meme formule, mais depuis l'ancre qui ne bouge pas.
             if self.ancre_aff is not None:
                 aff = self.ancre_aff + self.k * (p_guide - self.ancre_guide)
-                if self.base_directe and 0 in self.directs:
+                if self._plan():
                     aff = Rz(depart[0]) @ aff
                 self.cible_brute = np.array(aff, float)
 
@@ -471,7 +479,7 @@ class TeleopCart(Node):
                 # rejoint et s'arrete.
                 voulu = actuel + ec * (self.laisse / n_ec)
                 delta = self.k * (p_guide - self.ancre_guide)
-                if self.base_directe and 0 in self.directs:
+                if self._plan():
                     self.ancre_p = Rz(-depart[0]) @ voulu - delta
                 else:
                     self.ancre_p = voulu - delta
@@ -485,12 +493,7 @@ class TeleopCart(Node):
             if n > dmax:
                 cible = actuel + d * (dmax / n)
 
-            # dls() vise link_gripper : on retire l'offset de l'outil, exprime dans
-            # l'orientation demandee. Le point de commande reste le bout de pince.
-            cible_lg = cible - R_guide @ np.array([self.off, 0.0, 0.0])
-            # Meme solveur dans les deux cas : `directs` vide rend simplement tous
-            # les axes actifs. On ne garde pas deux chemins de code qui divergeraient.
-            q = self._dls_base_figee(depart, cible_lg, R_guide)
+            q = self._ik_poignet(depart, cible)
             for i, nom in enumerate(J):
                 lo, hi = LIMITS[nom]
                 if hi - lo >= 2.0 * math.pi - 1e-3:
@@ -515,10 +518,10 @@ class TeleopCart(Node):
                 if not self._diverge:
                     self._diverge = True
                     self.get_logger().error(
-                        "solveur divergent -> REANCRAGE. cible=%s R_fini=%s "
-                        "depart=%s axes_figes=%s"
-                        % (np.round(cible, 3), bool(np.all(np.isfinite(R_guide))),
-                           np.round(depart, 3), [J[i] for i in self.directs]))
+                        "solveur divergent -> REANCRAGE. cible=%s depart=%s "
+                        "axes_recopies=%s"
+                        % (np.round(cible, 3), np.round(depart, 3),
+                           [J[i] for i in self._recopies()]))
                 self._ancrer()
                 self._publier()
                 return
@@ -528,7 +531,7 @@ class TeleopCart(Node):
             if self._verif_saut > 0:
                 self._verif_saut -= 1
                 if self._verif_saut == 0 and self._tcp_ancre is not None:
-                    d = float(np.linalg.norm(self._p_outil(self.q) - self._tcp_ancre))
+                    d = float(np.linalg.norm(self._p_pince(self.q) - self._tcp_ancre))
                     # Deux appels DISTINCTS : rclpy memorise la severite par site
                     # d'appel et refuse qu'elle change ("Logger severity cannot be
                     # changed between calls"). Un ternaire sur le logger fait donc
@@ -544,24 +547,26 @@ class TeleopCart(Node):
 
     def _actifs(self):
         """Indices des axes que le solveur a le droit de bouger."""
-        return [i for i in range(len(J)) if i not in self.directs]
+        recopies = self._recopies()
+        return [i for i in range(len(J)) if i not in recopies]
 
-    def _dls_base_figee(self, j, target_p, target_R, iters=8):
-        """IK differentielle amortie, amortissement ADAPTATIF, axes figes exclus.
+    def _ik_poignet(self, j, cible, iters=8):
+        """IK differentielle amortie du CENTRE DU POIGNET, position seule.
 
-        Trois differences avec la version d'origine :
+        Les axes recopies (base eventuelle, joint_4, joint_5) gardent la valeur recue ;
+        le solveur ne bouge que les autres : joint_2 et joint_3, plus joint_1 si la base
+        n'est pas recopiee. Base recopiee, la cible est dans le plan du bras et 2 axes
+        placent 2 coordonnees : aucun compromis, plus d'orientation a ponderer.
+
+        Choix conserves de la version precedente :
 
         1. On resout dans le SOUS-ESPACE ACTIF. Annuler des colonnes laissait une
            matrice de rang deficient dont la plus petite valeur singuliere valait
            toujours zero -- tout critere de conditionnement calcule dessus etait donc
            faux, et l'amortissement adaptatif aurait ete au maximum en permanence.
         2. lambda ADAPTATIF : nul quand le bras est bien conditionne, il ne monte
-           qu'a l'approche d'une singularite. C'est ce qui enleve la mollesse
-           permanente sans rien perdre en stabilite la ou ca compte.
-        3. Forme NORMALE (Ja^T Ja + lam^2 I) de taille n x n, et non J J^T de taille
-           6 x 6 : avec moins de 6 axes actifs, J J^T est singuliere par construction
-           et n'est inversible que GRACE a l'amortissement -- ce qui obligeait a en
-           mettre meme sans singularite.
+           qu'a l'approche d'une singularite (coude tendu ou replie a fond).
+        3. Forme NORMALE (Ja^T Ja + lam^2 I) de taille n x n.
         """
         j = np.array(j, float)
         act = self._actifs()
@@ -572,13 +577,10 @@ class TeleopCart(Node):
         tol = float(self.get_parameter("ik_tolerance_m").value)
         I = np.eye(len(act))
         for _ in range(iters):
-            T = fkT(j)
-            e_p = target_p - T[:3, 3]
-            e_o = self.w_ori * (T[:3, :3] @ rotvec(T[:3, :3].T @ target_R))
-            if float(np.linalg.norm(e_p)) < tol and float(np.linalg.norm(e_o)) < tol:
+            e = np.asarray(cible, float) - fk_poignet(j)
+            if float(np.linalg.norm(e)) < tol:
                 break                      # deja au but : ne pas iterer pour rien
-            e = np.concatenate([e_p, e_o])
-            Ja = jac(j)[:, act]
+            Ja = self._jac_poignet(j, act)
             try:
                 smin = float(np.linalg.svd(Ja, compute_uv=False)[-1])
             except np.linalg.LinAlgError:
@@ -592,6 +594,10 @@ class TeleopCart(Node):
             dq[act] = dqa
             n = float(np.linalg.norm(dq))
             if not np.isfinite(n):
+                break
+            if n < 1e-9:
+                # Reste d'erreur hors d'atteinte des axes actifs (composante hors du
+                # plan du bras quand la base est recopiee) : rien de plus a gagner.
                 break
             if n > 0.5:
                 dq = dq * (0.5 / n)        # pas borne : une cible hors d'atteinte
@@ -607,10 +613,9 @@ class TeleopCart(Node):
         if not act:
             return
         try:
-            # Sur les colonnes ACTIVES : mesurer la jacobienne complete quand des axes
-            # sont figes donne un conditionnement qui ne correspond a rien de ce que
-            # le solveur peut reellement faire.
-            s = np.linalg.svd(jac(self.q)[:, act], compute_uv=False)
+            # Sur les colonnes ACTIVES, et pour le point que resout le solveur : tout
+            # autre conditionnement ne correspond a rien de ce qu'il peut faire.
+            s = np.linalg.svd(self._jac_poignet(self.q, act), compute_uv=False)
         except np.linalg.LinAlgError:
             return          # diagnostic seulement : jamais une cause d'arret
         proche = bool(s[-1] < self.seuil_sing)
@@ -633,17 +638,20 @@ class TeleopCart(Node):
         if self._garde_js is not None:
             self._garde_js.publier(m)
         if self.guide is not None:
-            T = fkT(self.q)
-            err = float(np.linalg.norm(rotvec(T[:3, :3].T @ self.guide[1])))
+            # [echelle, embraye, ECART DU POIGNET A SA CIBLE (mm), sigma_min]. Le 3e champ
+            # etait l'ecart d'orientation : l'orientation est maintenant recopiee, elle ne
+            # peut plus deriver. Ce qui peut ne plus suivre, c'est le poignet (butee,
+            # singularite, geste trop rapide).
+            ecart = (0.0 if self.cible_monde is None else 1000.0 * float(
+                np.linalg.norm(self.cible_monde - self._p_poignet(self.q))))
             e = Float64MultiArray()
             try:
                 act = self._actifs()
-                sig = float(np.linalg.svd(jac(self.q)[:, act],
+                sig = float(np.linalg.svd(self._jac_poignet(self.q, act),
                                           compute_uv=False)[-1]) if act else 0.0
             except np.linalg.LinAlgError:
                 sig = float("nan")
-            e.data = [float(self.k), 1.0 if self.embraye else 0.0,
-                      math.degrees(err), sig]
+            e.data = [float(self.k), 1.0 if self.embraye else 0.0, ecart, sig]
             self.pub_etat.publish(e)
 
     def _fichier_calib(self):
@@ -681,7 +689,7 @@ class TeleopCart(Node):
                         for j in self.cal.joints if j.nom_urdf.startswith("joint")))
 
     def _marqueurs(self):
-        """Cible demandee (vert) et TCP atteint (bleu), avec une croix de reperage.
+        """Cible demandee (vert) et centre du poignet atteint (bleu), avec une croix.
 
         La croix n'est pas cosmetique : quand le suivi est bon, la cible tombe A
         L'INTERIEUR du maillage de la pince et devient invisible -- constate le
@@ -695,11 +703,10 @@ class TeleopCart(Node):
         if self.cible_brute is None:
             return
         arr = MarkerArray()
-        # Le POINT COMMANDE (offset d'outil compris), comme la croix. fkT() seul donne
-        # link_gripper, 5 cm en arriere : les deux reperes restaient alors a 5 cm meme
-        # avec un suivi parfait, et la croix virait au rouge (seuil 3 cm) en
-        # permanence. Constate le 2026-09-13.
-        tcp = self._p_outil(self.q)
+        # Le POINT COMMANDE, comme la croix : le centre du poignet. Un autre point
+        # laisserait les deux reperes a distance constante meme avec un suivi parfait,
+        # et la croix virerait au rouge (seuil 3 cm) en permanence (vecu le 2026-09-13).
+        tcp = self._p_poignet(self.q)
         # Rouge des que le bras ne rejoint plus ce qu'on lui demande : c'est le signal
         # qu'on sort de l'atteignable (butee, singularite, ou geste trop rapide).
         ecart = float(np.linalg.norm(self.cible_brute - tcp))

@@ -75,6 +75,9 @@ def Rx(a): c, s = np.cos(a), np.sin(a); return np.array([[1, 0, 0], [0, c, -s], 
 def H(R, t): T = np.eye(4); T[:3, :3] = R; T[:3, 3] = t; return T
 
 
+LINK_GRIPPER_X = 0.06   # link_gripper : 6 cm devant joint_5, le long de son axe x
+
+
 def fkT(j):
     j1, j2, j3, j4, j5 = j
     T = np.eye(4)
@@ -83,8 +86,20 @@ def fkT(j):
     T = T @ H(Ry(j3), [-0.015224, 0, 0.441653])
     T = T @ H(Rx(j4), [0.119473, 0, 0.029716])
     T = T @ H(Ry(j5), [0.321516, 0, 0])
-    T = T @ H(np.eye(3), [0.06, 0, 0])     # link_gripper
+    T = T @ H(np.eye(3), [LINK_GRIPPER_X, 0, 0])     # link_gripper
     return T
+
+
+def fk_poignet(j):
+    """CENTRE DU POIGNET : origine de joint_5 (m, repere world).
+
+    Il est pose sur l'axe de roulis de joint_4 (decalage le long de x seulement) : ni
+    joint_4 ni joint_5 ne le deplacent, il ne depend que de joint_1..3. C'est le point
+    que pilote la teleoperation cartesienne, les deux axes du poignet etant recopies du
+    bras guide. Deduit de fkT (link_gripper est une translation pure le long de x apres
+    joint_5) pour ne garder qu'une seule copie de la chaine."""
+    T = fkT(j)
+    return T[:3, 3] - T[:3, :3] @ np.array([LINK_GRIPPER_X, 0.0, 0.0])
 
 
 def fk_pos(j):
