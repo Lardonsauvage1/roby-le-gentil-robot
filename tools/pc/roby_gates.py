@@ -91,6 +91,70 @@ def lire_urdf(urdf: str) -> tuple[list[str], dict[str, float]]:
     return plugins, initiale
 
 
+def origines_urdf(urdf: str) -> dict[str, tuple[tuple[float, ...], tuple[float, ...]]]:
+    """Origine (xyz, rpy) de chaque articulation d'un URDF — de quoi comparer deux geometries."""
+    racine = ET.fromstring(urdf)
+    out: dict[str, tuple[tuple[float, ...], tuple[float, ...]]] = {}
+    for j in racine.iter("joint"):
+        nom = j.get("name")
+        if not nom or j.find("parent") is None:
+            continue  # les <joint> de ros2_control n'ont pas de filiation : ce ne sont pas des repères
+        o = j.find("origin")
+        xyz = o.get("xyz", "0 0 0") if o is not None else "0 0 0"
+        rpy = o.get("rpy", "0 0 0") if o is not None else "0 0 0"
+        out[nom] = (tuple(float(v) for v in xyz.split()), tuple(float(v) for v in rpy.split()))
+    return out
+
+
+def chaine_du_depot():
+    """Chaine cinematique du depot (roby_cinematique). Import tardif : numpy + URDF presente.
+
+    Volontairement en echec franc si l'URDF manque (ADR-005) : une porte rouge, jamais un repli.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+    import roby_cinematique
+
+    return roby_cinematique.CHAINE, roby_cinematique.CHEMIN_URDF
+
+
+def verifier_geometrie(urdf_publie: str | None, chaine=None, chemin: str = "", tol: float = 1e-6) -> Resultat:
+    """La geometrie publiee par la stack doit etre celle du depot (ADR-005, 2026-09-20).
+
+    Sans cette porte, une machine oubliee lors d'un deploiement commande le bras avec une
+    description perimee : la garde, la teleop et MoveIt calculent alors sur des bras differents,
+    et rien ne le signale. C'est ce qui a coute une correction d'URDF de plus de 10 cm.
+    """
+    if urdf_publie is None:
+        return Resultat("geometrie", False, "/robot_description illisible")
+    if chaine is None:
+        try:
+            chaine, chemin = chaine_du_depot()
+        except Exception as e:  # URDF absente, numpy absent, chaine illisible
+            return Resultat("geometrie", False, f"cinematique du depot illisible : {e}")
+    publie = origines_urdf(urdf_publie)
+    ecarts = []
+    for seg in chaine:
+        nom = seg["nom"]
+        if nom not in publie:
+            ecarts.append(f"{nom} absente de l'URDF publiée")
+            continue
+        xyz, rpy = publie[nom]
+        for etiquette, a, b in (("xyz", seg["xyz"], xyz), ("rpy", seg["rpy"], rpy)):
+            if len(a) != len(b) or any(abs(float(x) - y) > tol for x, y in zip(a, b)):
+                mm = max(abs(float(x) - y) for x, y in zip(a, b)) if len(a) == len(b) else float("nan")
+                ecarts.append(f"{nom}.{etiquette} écart {mm * 1000:.1f} mm/mrad")
+    if ecarts:
+        return Resultat(
+            "geometrie",
+            False,
+            "l'URDF publiée DIFFÈRE de celle du dépôt : "
+            + " ; ".join(ecarts[:4])
+            + (f" (+{len(ecarts) - 4})" if len(ecarts) > 4 else "")
+            + ". Redéployer la machine qui publie /robot_description avant tout mouvement.",
+        )
+    return Resultat("geometrie", True, f"identique au dépôt ({len(chaine)} segments, {os.path.basename(chemin)})")
+
+
 def verifier_materiel(mode: str, plugins: list[str], nom: str = "materiel") -> Resultat:
     """Le materiel doit etre celui du mode, et lui seul.
 
@@ -411,6 +475,7 @@ def porte_stack(node, mode: str | None = None) -> tuple[list[Resultat], dict[str
     else:
         plugins, nid = lire_urdf(urdf)
         res.append(verifier_materiel(mode, plugins, nom="urdf"))
+    res.append(verifier_geometrie(urdf))
     q = sonde.joint_states()
     if not all(j in q for j in JOINTS):
         res.append(Resultat("pose", False, "/joint_states muet"))

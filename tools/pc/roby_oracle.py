@@ -30,34 +30,18 @@ import time
 
 import numpy as np
 
-# ================= Kinematique (repere link_gripper, copie de roby_tool_pickup) =================
-def Rz(a): c, s = np.cos(a), np.sin(a); return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1.]])
-def Ry(a): c, s = np.cos(a), np.sin(a); return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
-def Rx(a): c, s = np.cos(a), np.sin(a); return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
-def H(R, t): T = np.eye(4); T[:3, :3] = R; T[:3, 3] = t; return T
-
-
-def fkT(j):
-    j1, j2, j3, j4, j5 = j
-    T = np.eye(4)
-    T = T @ H(Rz(j1), [0, 0, 0.02])
-    T = T @ H(Ry(j2), [0.024031, 0, 0.202992])
-    T = T @ H(Ry(j3), [-0.015224, 0, 0.441653])
-    T = T @ H(Rx(j4), [0.119473, 0, 0.029716])
-    T = T @ H(Ry(j5), [0.321516, 0, 0])
-    T = T @ H(np.eye(3), [0.06, 0, 0])
-    return T
-
-
-def fk_pos(j):
-    return fkT(j)[:3, 3]
+# ================= Cinematique : LUE DANS L'URDF (ADR-005, 2026-09-20) =================
+# Ce fichier portait une copie manuelle de la chaine. C'est cette copie-la que la GARDE
+# (roby_guard importe ce module) utilisait pour son plancher : une URDF corrigee ne
+# l'atteignait pas. Plus aucune constante geometrique ici.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
+from roby_cinematique import (  # noqa: E402
+    Rz, Ry, Rx, H, fkT, fk_pos, fk_poignet, rotvec, jac, LIMITS, CHEMIN_URDF,
+)
 
 
 # ================= Configuration =================
 J = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
-LIMITS = {"joint_1": (-3.14159, 3.14159), "joint_2": (-1.6, 2.1),
-          "joint_3": (-3.0, 0.65), "joint_4": (-3.1416, 3.1416),
-          "joint_5": (-1.6, 1.6)}
 
 # Point de depose D — RELEVE SUR LE VRAI ROBOT DANS LA CUISINE (2026-09-07, demande Sam).
 # Bras amene au-dessus de la zone, puis verrou de tete ouvert 5 s et referme pour que

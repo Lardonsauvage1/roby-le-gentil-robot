@@ -70,9 +70,9 @@
       <geometry><box size="0.120 0.600 0.17"/></geometry>
     </collision>
     <inertial>
-      <mass value="1.5"/>
+      <mass value="1.679"/>
       <origin xyz="0.013 0 0.129" rpy="0 0 0"/>
-      <inertia ixx="0.010" ixy="0" ixz="0" iyy="0.010" iyz="0" izz="0.005"/>
+      <inertia ixx="0.050216" ixy="0.000001" ixz="-0.000845" iyy="0.010889" iyz="-0.000001" izz="0.046298"/>
     </inertial>
   </link>
 
@@ -80,7 +80,7 @@
   <joint name="joint_2" type="revolute">
     <parent link="link_1"/>
     <child  link="link_2"/>
-    <origin xyz="0.024031 0 0.202992" rpy="0 0 0"/>
+    <origin xyz="0.0248 0 0.1443" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <limit lower="-1.6" upper="2.1" effort="20.0" velocity="1.0"/>
     <dynamics damping="0.5" friction="0.1" acceleration="1.0"/>
@@ -115,7 +115,7 @@
   <joint name="joint_3" type="revolute">
     <parent link="link_2"/>
     <child  link="link_3"/>
-    <origin xyz="-0.015224 0 0.441653" rpy="0 0 0"/>
+    <origin xyz="-0.014494 0 0.442345" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <limit lower="-3.0" upper="0.65" effort="15.0" velocity="1.0"/>
     <dynamics damping="0.5" friction="0.1" acceleration="1.0"/>
@@ -146,7 +146,7 @@
   <joint name="joint_4" type="revolute">
     <parent link="link_3"/>
     <child  link="link_4"/>
-    <origin xyz="0.119473 0 0.029716" rpy="0 0 0"/>
+    <origin xyz="0.11945 0 0.029736" rpy="0 0 0"/>
     <axis xyz="1 0 0"/>
     <limit lower="-3.1416" upper="3.1416" effort="5.0" velocity="2.0"/>
     <dynamics damping="0.2" friction="0.05" acceleration="2.0"/>
@@ -177,7 +177,7 @@
   <joint name="joint_5" type="revolute">
     <parent link="link_4"/>
     <child  link="link_5"/>
-    <origin xyz="0.321516 0 0" rpy="0 0 0"/>
+    <origin xyz="0.32345 0 0.09896" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <limit lower="-1.6" upper="1.6" effort="5.0" velocity="2.0"/>
     <dynamics damping="0.2" friction="0.05" acceleration="2.0"/>
@@ -216,7 +216,7 @@
   <joint name="joint_gripper" type="fixed">
     <parent link="link_5"/>
     <child  link="link_gripper"/>
-    <origin xyz="0.06 0 0" rpy="0 0 0"/>
+    <origin xyz="0.09432 0 0.0005875" rpy="0 0 0"/>
   </joint>
 
   <link name="link_gripper">

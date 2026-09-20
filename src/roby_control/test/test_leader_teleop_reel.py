@@ -331,17 +331,43 @@ def test_geste_enregistre_ne_decroche_plus(monkeypatch):
 
 
 # ------------------------------------------------------------------ centre du poignet
-def test_centre_du_poignet_ne_depend_ni_de_joint_4_ni_de_joint_5():
-    from roby_tool_pickup import fk_poignet, fkT
+def test_centre_du_poignet_ne_depend_pas_de_joint_5():
+    """joint_5 ne deplace pas son propre centre : c'est ce qui fonde le point commande."""
+    from roby_tool_pickup import fk_poignet
     rng = np.random.default_rng(1)
     for _ in range(200):
         q = rng.uniform(-2.0, 2.0, 5)
         q2 = q.copy()
-        q2[3:] = rng.uniform(-3.0, 3.0, 2)
+        q2[4] = rng.uniform(-3.0, 3.0)
         assert np.allclose(fk_poignet(q2), fk_poignet(q), atol=1e-12)
-        # link_gripper est a 6 cm devant, le long de l'axe de l'outil
-        T = fkT(q)
-        assert np.allclose(T[:3, 3] - fk_poignet(q), T[:3, 0] * 0.06, atol=1e-12)
+
+
+def test_joint_4_DEPLACE_le_centre_du_poignet():
+    """⚠️ Depuis la mesure de l'URDF du 2026-09-20 (ADR-005), l'hypothese d'origine est FAUSSE.
+
+    L'origine de joint_5 n'est plus sur l'axe de roulis de joint_4 : elle en est ecartee de
+    9,9 cm en z. Rouler le poignet deplace donc le point commande d'environ 10 cm par radian,
+    et HORS du plan du bras — les axes 2 et 3 ne peuvent pas le rattraper. Le choix du point
+    commande par la teleoperation est a reprendre (consequence ecrite dans l'ADR-005).
+
+    Ce test n'approuve pas cette situation : il empeche qu'elle redevienne invisible.
+    """
+    from roby_tool_pickup import fk_poignet
+    q = np.array([1.5627, 0.9179, 0.4520, 0.0, 0.2009])   # nid
+    q4 = q.copy(); q4[3] += 0.25
+    assert np.linalg.norm(fk_poignet(q4) - fk_poignet(q)) > 0.02
+
+
+def test_le_decalage_de_la_pince_est_rigide():
+    """link_gripper est fixe par rapport a link_5 : la distance au centre du poignet est constante."""
+    from roby_tool_pickup import fk_poignet, fkT
+    rng = np.random.default_rng(1)
+    d0 = None
+    for _ in range(200):
+        q = rng.uniform(-2.0, 2.0, 5)
+        d = float(np.linalg.norm(fkT(q)[:3, 3] - fk_poignet(q)))
+        d0 = d if d0 is None else d0
+        assert abs(d - d0) < 1e-12
 
 
 def test_axes_du_poignet_toujours_recopies(banc):
@@ -361,7 +387,21 @@ def _poignet(m):
     return fk_poignet(reel.vers_modele(m.points[-1].positions))
 
 
-def test_tourner_le_poignet_du_guide_ne_deplace_pas_le_centre(banc):
+def test_rouler_le_poignet_du_guide_est_reproduit_a_l_identique(banc):
+    """Rouler le poignet du guide : le robot reproduit exactement le meme deplacement.
+
+    Ce test s'appelait « ...ne deplace pas le centre » et verifiait une invariance. Elle
+    tenait a une hypothese de l'ancienne description : l'origine de joint_5 etait posee sur
+    l'axe de roulis de joint_4, donc rouler ne deplacait rien. L'URDF mesuree du 2026-09-20
+    (ADR-005) l'ecarte de 9,9 cm en z : rouler de 0,25 rad emporte ce centre de ~25 mm.
+
+    Le guide et le robot partagent cette description. Ce que la main fait de son propre
+    centre de poignet, le robot le refait : ce n'est pas une derive, c'est le suivi 1:1
+    demande. Ce qu'on verifie donc, c'est la FIDELITE au guide — et on enregistre au passage
+    l'amplitude reellement induite par le roulis, pour que le jour ou le point commande
+    changera, la difference soit visible et non silencieuse.
+    """
+    from roby_tool_pickup import fk_poignet
     banc.suivre = True
     assert embrayer(banc).success
     p0 = _poignet(type("M", (), {"points": [type("P", (), {"positions": Q0})]}))
@@ -372,9 +412,23 @@ def test_tourner_le_poignet_du_guide_ne_deplace_pas_le_centre(banc):
         banc.recues[-1][1].points[-1].positions[3:], banc.cible_guide[3:], atol=1e-3),
         max_s=4.0)
     assert banc.n.embraye
+    banc.tourner(duree=1.0)                                   # laisser la consigne se poser
+
+    voulu = fk_poignet(banc.cible_guide)                      # centre du poignet DU GUIDE
+    assert np.linalg.norm(voulu - p0) > 0.02, "le roulis doit vraiment emporter le centre"
+    assert np.linalg.norm(_poignet(banc.recues[-1][1]) - voulu) < 3e-3   # suivi fidele
+
+
+def test_le_roulis_du_guide_ne_fait_pas_deriver_les_axes_1_a_3(banc):
+    """Le roulis passe par les axes recopies : l'IK n'a pas a remuer l'epaule ni le coude."""
+    banc.suivre = True
+    assert embrayer(banc).success
+    banc.vitesse_main = 0.3
+    banc.cible_guide = Q0 + np.array([0, 0, 0, 0.25, -0.30])
+    banc.recues.clear()
+    banc.tourner(duree=2.0)
     for _, m in banc.recues:
-        assert np.linalg.norm(_poignet(m) - p0) < 1e-4      # le centre ne bouge pas
-        assert np.allclose(m.points[-1].positions[:3], Q0[:3], atol=1e-4)
+        assert np.allclose(m.points[-1].positions[:3], Q0[:3], atol=0.02)
 
 
 def test_ik_place_le_centre_du_poignet(banc):

@@ -24,6 +24,8 @@ import time
 import numpy as np
 import rclpy
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
+
 import roby_gates
 from rclpy.node import Node
 from rclpy.action import ActionClient
@@ -62,65 +64,16 @@ J3_REF = float(os.environ.get("ROBY_J3_REF", "0.5237"))   # joint_3 au nid = anc
 FREE_VEL = 0.50            # facteur vitesse du mouvement libre MoveIt (x5 vs le run lent 0.10)
 DESCENT_W_ORI = 1.0        # poids orientation des LIGNES DROITES (1=strict, changeur d'outil).
                            # L'oracle le baisse (~0.2) pour prioriser la position sur toute la table.
-LIMITS = {"joint_1": (-3.14159, 3.14159), "joint_2": (-1.6, 2.1),
-          "joint_3": (-3.0, 0.65), "joint_4": (-3.1416, 3.1416),
-          "joint_5": (-1.6, 1.6)}
 POSES_FILE = os.path.expanduser("~/roby_poses.yaml")
 
 
-# ---------- FK / Jacobienne / DLS (repère link_gripper) ----------
-def Rz(a): c, s = np.cos(a), np.sin(a); return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1.]])
-def Ry(a): c, s = np.cos(a), np.sin(a); return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
-def Rx(a): c, s = np.cos(a), np.sin(a); return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
-def H(R, t): T = np.eye(4); T[:3, :3] = R; T[:3, 3] = t; return T
-
-
-LINK_GRIPPER_X = 0.06   # link_gripper : 6 cm devant joint_5, le long de son axe x
-
-
-def fkT(j):
-    j1, j2, j3, j4, j5 = j
-    T = np.eye(4)
-    T = T @ H(Rz(j1), [0, 0, 0.02])
-    T = T @ H(Ry(j2), [0.024031, 0, 0.202992])
-    T = T @ H(Ry(j3), [-0.015224, 0, 0.441653])
-    T = T @ H(Rx(j4), [0.119473, 0, 0.029716])
-    T = T @ H(Ry(j5), [0.321516, 0, 0])
-    T = T @ H(np.eye(3), [LINK_GRIPPER_X, 0, 0])     # link_gripper
-    return T
-
-
-def fk_poignet(j):
-    """CENTRE DU POIGNET : origine de joint_5 (m, repere world).
-
-    Il est pose sur l'axe de roulis de joint_4 (decalage le long de x seulement) : ni
-    joint_4 ni joint_5 ne le deplacent, il ne depend que de joint_1..3. C'est le point
-    que pilote la teleoperation cartesienne, les deux axes du poignet etant recopies du
-    bras guide. Deduit de fkT (link_gripper est une translation pure le long de x apres
-    joint_5) pour ne garder qu'une seule copie de la chaine."""
-    T = fkT(j)
-    return T[:3, 3] - T[:3, :3] @ np.array([LINK_GRIPPER_X, 0.0, 0.0])
-
-
-def fk_pos(j):
-    return fkT(j)[:3, 3]
-
-
-def rotvec(Rm):
-    ang = np.arccos(np.clip((np.trace(Rm) - 1) / 2, -1, 1))
-    if ang < 1e-8:
-        return np.zeros(3)
-    return ang / (2 * np.sin(ang)) * np.array(
-        [Rm[2, 1] - Rm[1, 2], Rm[0, 2] - Rm[2, 0], Rm[1, 0] - Rm[0, 1]])
-
-
-def jac(j, eps=1e-5):
-    T0 = fkT(j); p0 = T0[:3, 3]; R0 = T0[:3, :3]; Jm = np.zeros((6, 5))
-    for k in range(5):
-        jj = np.array(j, float); jj[k] += eps; T1 = fkT(jj)
-        Jm[:3, k] = (T1[:3, 3] - p0) / eps
-        Jm[3:, k] = R0 @ rotvec(R0.T @ T1[:3, :3]) / eps
-    return Jm
+# ---------- FK / Jacobienne (repère link_gripper) : LUES DANS L'URDF ----------
+# ADR-005 (2026-09-20) : la geometrie du bras n'a qu'une source, l'URDF du depot. Elle
+# n'est plus recopiee ici. Les noms restent exportes pour les scripts qui les importent
+# depuis ce module (roby_replay_cartesian, roby_infer_cart, roby_oracle...).
+from roby_cinematique import (  # noqa: E402
+    Rz, Ry, Rx, H, fkT, fk_pos, fk_poignet, rotvec, jac, LIMITS, CHEMIN_URDF,
+)
 
 
 def dls(j, target_p, target_R, lam=0.06, iters=8, w_ori=1.0):

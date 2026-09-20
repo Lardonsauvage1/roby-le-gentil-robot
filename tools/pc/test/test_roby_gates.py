@@ -120,3 +120,60 @@ def test_arret_hors_nid_seulement_assume():
 def test_cameras():
     assert g.verifier_cameras({"left": 15.0, "right": 15.2}).ok
     assert not g.verifier_cameras({"left": 15.0, "right": 0.0}).ok
+
+
+# ---------------------------------------------------------------- porte geometrie (ADR-005)
+
+CHAINE_REF = [
+    {"nom": "joint_1", "xyz": (0.0, 0.0, 0.02), "rpy": (0.0, 0.0, 0.0)},
+    {"nom": "joint_2", "xyz": (0.0248, 0.0, 0.1443), "rpy": (0.0, 0.0, 0.0)},
+]
+
+
+def urdf_geo(j2_z=0.1443, rpy2="0 0 0"):
+    return (
+        '<robot name="r">'
+        '<joint name="joint_1" type="revolute"><parent link="base_link"/><child link="link_1"/>'
+        '<origin xyz="0 0 0.02" rpy="0 0 0"/></joint>'
+        f'<joint name="joint_2" type="revolute"><parent link="link_1"/><child link="link_2"/>'
+        f'<origin xyz="0.0248 0 {j2_z}" rpy="{rpy2}"/></joint>'
+        "</robot>"
+    )
+
+
+def test_geometrie_identique():
+    r = g.verifier_geometrie(urdf_geo(), chaine=CHAINE_REF, chemin="robot.urdf.xacro")
+    assert r.ok, r.message
+
+
+def test_geometrie_divergente_est_rouge():
+    r = g.verifier_geometrie(urdf_geo(j2_z=0.2030), chaine=CHAINE_REF)
+    assert not r.ok
+    assert "joint_2.xyz" in r.message and "Redéployer" in r.message
+
+
+def test_geometrie_rotation_divergente():
+    r = g.verifier_geometrie(urdf_geo(rpy2="0 0.1 0"), chaine=CHAINE_REF)
+    assert not r.ok and "joint_2.rpy" in r.message
+
+
+def test_geometrie_articulation_absente():
+    urdf = '<robot name="r"><joint name="joint_1" type="revolute"><parent link="base_link"/>' \
+           '<child link="link_1"/><origin xyz="0 0 0.02" rpy="0 0 0"/></joint></robot>'
+    r = g.verifier_geometrie(urdf, chaine=CHAINE_REF)
+    assert not r.ok and "joint_2 absente" in r.message
+
+
+def test_geometrie_urdf_illisible():
+    assert not g.verifier_geometrie(None, chaine=CHAINE_REF).ok
+
+
+def test_origines_ignorent_les_joints_ros2_control():
+    """Un <joint> de ros2_control est homonyme mais n'a pas de filiation : il n'est pas un repère."""
+    urdf = urdf_geo().replace(
+        "</robot>",
+        '<ros2_control name="S" type="system"><joint name="joint_1">'
+        '<command_interface name="position"/></joint></ros2_control></robot>')
+    o = g.origines_urdf(urdf)
+    assert set(o) == {"joint_1", "joint_2"}
+    assert o["joint_1"][0] == (0.0, 0.0, 0.02)

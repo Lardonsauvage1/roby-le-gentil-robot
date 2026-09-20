@@ -54,7 +54,12 @@ sys.path.insert(0, os.path.normpath(_TOOLS) if os.path.isdir(_TOOLS)
 from roby_tool_pickup import LIMITS, Rz, fk_poignet, fkT   # noqa: E402
 
 J = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
-POIGNET = (3, 4)      # joint_4, joint_5 : TOUJOURS recopies (ils ne deplacent pas le point)
+# joint_4, joint_5 : TOUJOURS recopies du bras guide -- ils portent l'ORIENTATION.
+# ⚠️ Depuis l'URDF mesuree du 2026-09-20 (ADR-005), joint_4 deplace aussi le centre du
+# poignet (~10 cm/rad) : ce n'est pas une derive, le guide a la meme geometrie et le robot
+# reproduit son deplacement a 1:1. Mais l'affirmation « ils ne deplacent pas le point »
+# n'est plus vraie, et le choix du point commande est a reprendre (consequence de l'ADR).
+POIGNET = (3, 4)
 
 # Pose de travail du reseau BC, mesuree sur le vrai robot (TCP a z = 0,33 m).
 POSE_TRAVAIL = [-0.2991, 0.8560, -0.4835, -0.0492, 1.3045]
@@ -218,8 +223,11 @@ class TeleopCart(Node):
         return fkT(q)[:3, 3]
 
     def _jac_poignet(self, q, axes, eps=1e-6):
-        """Jacobienne en position du centre du poignet, colonnes `axes` (3 x n). Celles
-        de joint_4 et joint_5 seraient nulles par construction."""
+        """Jacobienne en position du centre du poignet, colonnes `axes` (3 x n).
+
+        `axes` ne contient que les axes rendus a l'IK. Celle de joint_5 serait nulle ; celle
+        de joint_4 ne l'est PLUS depuis l'URDF du 2026-09-20 (ADR-005), mais joint_4 reste
+        recopie du guide, donc hors de `axes`."""
         q = np.asarray(q, float)
         p0, Jm = fk_poignet(q), np.zeros((3, len(axes)))
         for c, i in enumerate(axes):
