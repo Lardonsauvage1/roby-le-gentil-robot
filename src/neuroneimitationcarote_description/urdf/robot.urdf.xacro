@@ -41,7 +41,9 @@
   <joint name="joint_1" type="revolute">
     <parent link="base_link"/>
     <child  link="link_1"/>
-    <origin xyz="0 0 0.02" rpy="0 0 0"/>
+    <!-- z = 0 : l'axe de base est POSE sur la face superieure du socle, qui affleure
+         exactement l'origine (recalage du 2026-09-20). Valait 0.02 auparavant. -->
+    <origin xyz="0 0 0" rpy="0 0 0"/>
     <axis xyz="0 0 1"/>
     <limit lower="-3.14159" upper="3.14159" effort="10.0" velocity="1.0"/>
     <dynamics damping="0.5" friction="0.1" acceleration="1.0"/>
@@ -80,7 +82,7 @@
   <joint name="joint_2" type="revolute">
     <parent link="link_1"/>
     <child  link="link_2"/>
-    <origin xyz="0.0248 0 0.1443" rpy="0 0 0"/>
+    <origin xyz="0.0249368 0 0.203" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <limit lower="-1.6" upper="2.1" effort="20.0" velocity="1.0"/>
     <dynamics damping="0.5" friction="0.1" acceleration="1.0"/>
@@ -177,7 +179,7 @@
   <joint name="joint_5" type="revolute">
     <parent link="link_4"/>
     <child  link="link_5"/>
-    <origin xyz="0.32345 0 0.09896" rpy="0 0 0"/>
+    <origin xyz="0.32345 0 0" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <limit lower="-1.6" upper="1.6" effort="5.0" velocity="2.0"/>
     <dynamics damping="0.2" friction="0.05" acceleration="2.0"/>
@@ -216,7 +218,7 @@
   <joint name="joint_gripper" type="fixed">
     <parent link="link_5"/>
     <child  link="link_gripper"/>
-    <origin xyz="0.09432 0 0.0005875" rpy="0 0 0"/>
+    <origin xyz="0.09232 0 0.0005875" rpy="0 0 0"/>
   </joint>
 
   <link name="link_gripper">
@@ -249,5 +251,40 @@
     <origin xyz="0.10 0 0" rpy="0 0 0"/>
   </joint>
   <link name="tcp"/>
+
+  <!-- SOCLE — le support sur lequel le bras est boulonné.
+       Il n'est pas mobile, mais il suit le robot partout où on l'installe : il vit donc
+       dans la description, pas dans une scène. Son maillage est déjà exprimé dans le
+       repère de la base (en-tête du STL), d'où l'origine nulle. Il va de z=-0.179 à
+       z=+0.024, et se pose exactement sur le plateau de la table de la scène cuisine
+       (Table_sous_robot, dessus à z=-0.179).
+       Pas de <collision> : l'ajouter exigerait d'abord de désactiver, dans la SRDF, la
+       collision socle/base_link (adjacents par construction), sinon toute pose devient
+       invalide. Le plateau de la table couvre déjà le volume pour la planification. -->
+  <joint name="joint_socle" type="fixed">
+    <parent link="base_link"/>
+    <child  link="socle"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="socle">
+    <visual>
+      <!-- Maillage livre le 2026-09-20 (assemblage_support.stl) : en MILLIMETRES, et
+           son origine est au point le plus BAS du socle, pas a la base du robot.
+           Point de reference donne par NM : dans le repere du STL, le point
+           (-0.5, -111, 203) mm est celui qui doit coincider avec l'origine du robot
+           et de la scene. C'est le CENTRE de la face superieure de la platine de
+           montage (261 x 261 mm). L'origine ci-dessous est donc simplement l'oppose
+           de ce point, converti en metres.
+           Le decor de la scene cuisine a ete translate du meme deplacement
+           (+0.5, -59.22, -23.9 mm) pour rester en contact avec le socle. -->
+      <origin xyz="0.0005 0.111 -0.203" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://roby_environments/meshes/support_robot.stl"
+              scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="dark_grey"/>
+    </visual>
+  </link>
 
 </robot>

@@ -88,15 +88,17 @@ def test_poignet_est_l_origine_de_joint_5():
     assert np.allclose(c.fk_poignet(q), c.fk_poignet(q5), atol=1e-12)
 
 
-def test_poignet_bouge_avec_joint_4():
-    """Constat de la mesure 2026-09-20 : joint_4 DEPLACE le centre du poignet.
+def test_poignet_ne_bouge_pas_avec_joint_4():
+    """L'avant-bras est droit : joint_4 ne deplace pas l'origine de joint_5.
 
-    L'ancienne teleop supposait l'inverse. Si ce test se met a echouer, c'est que la
-    geometrie est revenue a l'ancienne hypothese — il faut le savoir, pas l'ignorer.
+    L'URDF livree le 2026-09-20 placait cette origine a 99 mm de l'axe du tube, ce qui
+    rendait l'inverse vrai. Corrige apres verification (emprise CAO, axe de symetrie du
+    maillage, volume de collision de l'URDF) et confirmation de NM. Ce test verrouille
+    le retablissement : la teleoperation cartesienne en depend.
     """
     q = [0.0, 0.6, -0.3, 0.0, 0.0]
     q4 = list(q); q4[3] = 1.0
-    assert np.linalg.norm(c.fk_poignet(q4) - c.fk_poignet(q)) > 0.01
+    assert np.allclose(c.fk_poignet(q4), c.fk_poignet(q), atol=1e-12)
 
 
 def test_jacobienne_coherente_avec_la_fk():

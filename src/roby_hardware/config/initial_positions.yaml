@@ -1,6 +1,23 @@
+# Pose du bras AU NID — ce que le controleur suppose vrai au demarrage (open-loop).
+#
+# ⚠️ RE-ETIQUETAGE DU NID, 2026-09-20. Remplace [1.5627, 0.9179, 0.4520, 0.0, 0.2009].
+# Delta applique : [-0.00250, +0.01710, +0.13683, -0.00249, -0.15390] rad
+#                  [ -0.143,   +0.980,   +7.840,   -0.143,   -8.818 ] deg
+#
+# Origine : releve EN SIMULATION par NM, en amenant le modele solide du bras jusqu'a
+# ce qu'il coincide avec le berceau, apres avoir masque les robots translucides de
+# MoveIt (Trajectory et Planning Request) qui n'affichent pas l'etat reel. NM a decide
+# de ne PAS mesurer sur le robot et de retenir ces valeurs.
+#
+# Le berceau physique n'a pas bouge : ce sont les angles qui le designent qui changent.
+# Toute pose articulaire enregistree AVANT cette date designe donc une configuration
+# physique differente tant qu'on ne lui applique pas le meme delta. Les poses liees au
+# nid (roby_sortie_nid.yaml, approche_nid et sortie de roby_poses.yaml) ont ete
+# decalees. Les poses validees par demonstration (changeur_outil, approche_changeur,
+# D_pose_cone, depose_cuisine, D_JOINTS de roby_oracle) ne l'ont PAS ete.
 initial_positions:
-  joint_1: 1.5627
-  joint_2: 0.9179
-  joint_3: 0.4520
-  joint_4: 0.0
-  joint_5: 0.2009
+  joint_1: 1.56020
+  joint_2: 0.93500
+  joint_3: 0.58883
+  joint_4: -0.00249
+  joint_5: 0.04700

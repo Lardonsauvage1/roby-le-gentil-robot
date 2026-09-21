@@ -8,15 +8,27 @@ le seul point dont la position est connue des DEUX cotes — par la cinematique 
 C'est un marqueur VISUEL, pas un obstacle : l'ajouter a la scene de planification
 bloquerait le bras chaque fois qu'il veut aller se docker.
 
-Position (repere base robot), deduite des vecteurs mesures par Sam le 2026-09-06 :
-    origine du maillage -> base robot : (-2, -171.824, +203) mm
-    origine du maillage -> nid        : (+5, +323.50, +125) mm
-    donc base robot -> nid            : (+7, +495.324, -78) mm
+Position (repere base robot) — RELEVEE EN SIMULATION le 2026-09-20 :
 
-Controle croise : la cinematique directe a la pose de docking donne
-(+4.0, +490.2, -18.1) mm, soit 3 mm en X et 5 mm en Y d'ecart — l'alignement est bon.
-Les 60 mm d'ecart en Z sont exactement l'offset TCP de notre `fkT` (le vecteur de Sam
-vise le COUPLEUR, notre calcul donne le TCP, 6 cm plus loin).
+    pose articulaire   [1.56020, 0.93500, 0.58883, -0.00249, 0.04700] rad
+                       [89.393, 53.572, 33.737, -0.143, 2.693] deg
+    changeur           (+4.495, +423.298, -56.001) mm
+    centre du poignet  (+4.479, +422.714, +36.319) mm
+    bout de l'outil    (+4.507, +423.294, -156.001) mm
+
+Comment elle a ete obtenue : NM a amene le bras simule jusqu'a ce que le modele SOLIDE
+coincide avec le berceau, apres avoir masque les robots translucides de MoveIt
+(Trajectory et Planning Request) qui ne montrent ni l'un ni l'autre l'etat reel.
+
+⚠️ C'est un reglage A L'OEIL sur un modele 3D, pas une mesure physique. Il remplace
+l'ancienne pose (perimee, confirme par NM) mais il ne vaut que ce que vaut la geometrie
+corrigee le 2026-09-20. La mesure qui ferait foi reste : tete posee dans le berceau,
+moteurs coupes, lecture de /joint_states sur le vrai robot.
+
+Historique des valeurs essayees pour X ce jour-la : 5.5 -> 4.5 -> 6.0 -> 8.0 -> 18.0,
+puis abandonnees au profit du relevé ci-dessus. Les vecteurs du 2026-09-06 (maillage ->
+nid = (+5, +323.50, +125) mm, maillage -> base = (-2, -171.824, +203) mm) donnaient
+(+7, +495.324, -78) mm ; ils sont desormais caduques.
 
     bash ~/roby_marqueur_nid.sh
 """
@@ -26,8 +38,11 @@ from geometry_msgs.msg import Point
 from rclpy.node import Node
 from visualization_msgs.msg import Marker, MarkerArray
 
-NID = (0.007, 0.495324, -0.078)      # m, repere base robot
-TCP_FK = (0.004, 0.490200, -0.018)   # m, meme point vu par notre cinematique
+NID = (0.004495, 0.423298, -0.056001)   # m — releve en simulation (voir en-tete)
+# Pose articulaire du nid ainsi relevee — a confronter au vrai robot avant de
+# l'ecrire dans src/roby_hardware/config/initial_positions.yaml.
+Q_NID = (1.56020, 0.93500, 0.58883, -0.00249, 0.04700)   # rad
+TCP_FK = (0.004495, 0.423298, -0.056001)  # meme point par la cinematique : confondu
 
 
 class MarqueurNid(Node):
@@ -58,24 +73,11 @@ class MarqueurNid(Node):
         m.color.r, m.color.g, m.color.b, m.color.a = couleur
         return m
 
-    def _mesh(self, i):
-        """Le support REEL, avec le nid dedans — pour verifier a l'oeil que le nid
-        tombe au bon endroit dans la piece."""
-        m = Marker()
-        m.header.frame_id = "base_link"
-        m.header.stamp = self.get_clock().now().to_msg()
-        m.ns, m.id = "nid", i
-        m.action = Marker.ADD
-        m.type = Marker.MESH_RESOURCE
-        m.mesh_resource = "package://roby_environments/meshes/support_robot.stl"
-        m.pose.orientation.w = 1.0
-        m.scale.x = m.scale.y = m.scale.z = 1.0
-        m.color.r, m.color.g, m.color.b, m.color.a = (0.55, 0.55, 0.60, 0.45)
-        return m
-
     def publier(self):
         a = MarkerArray()
-        a.markers.append(self._mesh(4))
+        # Le socle n'est plus dessine ici : il est devenu le corps fixe "socle" de l'URDF
+        # et s'affiche via le RobotModel. En garder une copie a l'echelle 1.0 l'aurait
+        # rendu 1000x trop grand depuis que le maillage livre est en millimetres.
         # Vert : le nid d'apres les mesures physiques (reference)
         a.markers.append(self._m(0, NID, (0.1, 0.9, 0.1, 0.9), 0.03))
         a.markers.append(self._m(1, NID, (0.1, 0.9, 0.1, 1.0), 0.03, "nid (mesure)"))

@@ -336,7 +336,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--nest",
         type=float,
-        default=0.2009,
+        default=0.04700,   # nid re-etiquete 2026-09-20
         help="position du nid (rad), cf initial_positions.yaml",
     )
     parser.add_argument(

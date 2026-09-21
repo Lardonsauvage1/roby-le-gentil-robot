@@ -152,7 +152,7 @@ class WristBldcNode(Node):
             "port": "auto",
             "baudrate": 115200,
             "simulate": False,
-            "nest_position": 0.2009,
+            "nest_position": 0.04700,   # nid re-etiquete 2026-09-20
             "recalibrate_on_start": True,
             "enable_on_start": True,
             "startup_homing_timeout_s": 15.0,

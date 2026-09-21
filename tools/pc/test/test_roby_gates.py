@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import roby_gates as g  # noqa: E402
 
-NID = {"joint_1": 1.5627, "joint_2": 0.9179, "joint_3": 0.4520, "joint_4": 0.0, "joint_5": 0.2009}
+NID = {"joint_1": 1.56020, "joint_2": 0.93500, "joint_3": 0.58883, "joint_4": -0.00249, "joint_5": 0.04700}
 
 
 def urdf(plugins, initiale=NID):
@@ -85,7 +85,7 @@ def test_pose_au_nid():
 
 
 def test_format_pose_comme_la_skill():
-    assert g.formater_pose(NID) == "89.54 / 52.59 / 25.90 / 0.00 / 11.51"
+    assert g.formater_pose(NID) == "89.39 / 53.57 / 33.74 / -0.14 / 2.69"
 
 
 def test_scene():
