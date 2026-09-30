@@ -18,8 +18,9 @@ Usage (PC) :
     unset GTK_PATH
     ros2 launch neuroneimitationcarote_moveit_config pc_moveit.launch.py
 
-Axe 5 : wrist:=bldc (a passer AUSSI a robot_control.launch.py sur le Pi5) limite
-joint_5 a ce que le poignet BLDC suit reellement (0.5 rad/s). Defaut : servo.
+Axe 5 : wrist:=bldc (defaut depuis le 2026-09-30, meme defaut que robot_control.launch.py
+sur le Pi5) limite joint_5 a ce que le poignet BLDC suit reellement (0.5 rad/s).
+wrist:=servo : ancien servo provisoire, demonte.
 
 Scene de collision : chargee ICI, automatiquement (scene:=cuisine par defaut, scene:=aucune
 pour s'en passer). Elle vit dans move_group : chaque relance la perdait, et on l'a oubliee
@@ -42,9 +43,9 @@ def generate_launch_description():
         [
             DeclareLaunchArgument(
                 "wrist",
-                default_value="servo",
+                default_value="bldc",
                 choices=["servo", "bldc"],
-                description="actionneur de l'axe 5 : servo (actuel) ou bldc (nouveau poignet)",
+                description="actionneur de l'axe 5 : bldc (poignet monte, defaut) ou servo (ancien servo provisoire, demonte)",
             ),
             DeclareLaunchArgument(
                 "scene",

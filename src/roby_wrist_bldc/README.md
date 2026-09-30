@@ -55,8 +55,8 @@ ros2 service call /roby/wrist_bldc/reset_fault std_srvs/srv/Trigger
 ros2 topic echo /roby/wrist_bldc/status
 ```
 
-`wrist:=servo` (défaut) garde l'ancien poignet servo PCA9685 CH1 : rien ne change tant que
-l'argument n'est pas passé (URDF et paramètres MoveIt identiques à l'octet près, vérifié).
+`wrist:=bldc` est le **défaut** depuis le 2026-09-30 (poignet BLDC monté sur le bras).
+`wrist:=servo` reste disponible pour l'ancien servo provisoire PCA9685 CH1, démonté.
 
 Test du pont complet sans matériel (JTC → RobySystem → nœud → carte simulée) :
 `python3 -m pytest -q src/roby_hardware/test/test_bldc_bridge_sim.py`.

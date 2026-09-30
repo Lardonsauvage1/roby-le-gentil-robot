@@ -9,10 +9,10 @@ Le Pi5 ne garde que le temps-reel : rsp + ros2_control_node + spawners.
 Le rsp du Pi5 est l UNIQUE publisher de /robot_description (URDF hardware reel).
 
 Axe 5 (poignet) :
-    wrist:=servo  (defaut) servo provisoire PCA9685 CH1, comportement inchange
-    wrist:=bldc   nouveau poignet BLDC : lance aussi le noeud roby_wrist_bldc, qui
-                  recale la carte au nid au demarrage (tete AU NID avant de lancer).
-                  Cote PC : pc_moveit.launch.py wrist:=bldc (limites de vitesse).
+    wrist:=bldc   (defaut depuis le 2026-09-30, poignet BLDC monte) lance aussi le noeud
+                  roby_wrist_bldc, qui recale la carte au nid au demarrage (tete AU NID
+                  avant de lancer). Cote PC : pc_moveit.launch.py, meme defaut.
+    wrist:=servo  ancien servo provisoire PCA9685 CH1 (demonte : CH1 est libre).
 
 Simulation (PC, `roby up --sim`) :
     use_mock:=true  meme launch, meme URDF, memes controleurs, pose initiale = nid ; seul le
@@ -36,9 +36,9 @@ def generate_launch_description():
         [
             DeclareLaunchArgument(
                 "wrist",
-                default_value="servo",
+                default_value="bldc",
                 choices=["servo", "bldc"],
-                description="actionneur de l'axe 5 : servo (actuel) ou bldc (nouveau poignet)",
+                description="actionneur de l'axe 5 : bldc (poignet monte, defaut) ou servo (ancien servo provisoire, demonte)",
             ),
             DeclareLaunchArgument(
                 "use_mock",

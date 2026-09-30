@@ -23,7 +23,7 @@ Reconstruire une machine : [`deploy/pi5/README.md`](deploy/pi5/README.md),
 | `src/roby_hardware` | plugin C++ ros2_control `RobySystem` : steppers en GPIO (axes 1-3), servos PCA9685 (axes 4-5, verrou de tête, pince), joint BLDC optionnel (`wrist:=bldc`) ; `robot_control.launch.py` = côté Pi5 |
 | `src/roby_environments` | scènes de collision MoveIt (`cuisine`, 35 obstacles ; `atelier_actuel`) |
 | `src/roby_control` | bras guide SO-ARM 101 (`leader_node`, correspondance, joystick) et téléopérations : bras **simulé** (`leader_teleop_sim`, `_pos`, `_cart`) et **vrai** bras via le garde (`leader_teleop_reel`) ; nœuds ArUco / suivi visuel (non modifiés depuis juin 2026) |
-| `src/roby_wrist_bldc` | poignet axe 5 BLDC (carte B-G431B-ESC1 + SimpleFOC) : driver série, nœud ROS, pont vers `RobySystem` — **pas encore monté sur le robot** |
+| `src/roby_wrist_bldc` | poignet axe 5 BLDC (carte B-G431B-ESC1 + SimpleFOC) : driver série, nœud ROS, pont vers `RobySystem` — **monté, lancé par défaut** (`wrist:=bldc`) |
 | `firmware/wrist_bldc_simplefoc` | firmware PlatformIO de la carte du poignet BLDC — **seule copie** |
 | `tools/pc`, `tools/pi5` | outillage opérationnel de chaque machine, appelé par des liens depuis le home — voir [`tools/README.md`](tools/README.md) |
 | `CABLAGE.md` | **fiche unique** du câblage et de l'adressage (GPIO, I2C, USB, réseau) |
