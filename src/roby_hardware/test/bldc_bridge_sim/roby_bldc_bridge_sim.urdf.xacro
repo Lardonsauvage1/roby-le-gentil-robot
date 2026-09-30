@@ -31,7 +31,6 @@
             <param name="joint_5_bldc_wait_on_activate_s">8.0</param>
             <param name="i2c_bus">/dev/roby_test_pas_de_i2c</param>
             <param name="coupling_enabled">false</param>
-            <param name="encoder_enabled">false</param>
         </hardware>
         <xacro:sim_joint name="joint_1" initial="0.0"/>
         <xacro:sim_joint name="joint_2" initial="0.0"/>

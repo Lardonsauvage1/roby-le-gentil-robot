@@ -88,7 +88,7 @@ def _setup(context):
             "max_acceleration": 2.0,
         }
     if wrist == "bldc":
-        # Carte : 15 rad/s moteur = 0.75 rad/s bras (reducteur 20:1) ; le noeud
+        # Carte : 15 rad/s moteur = 1.67 rad/s bras (reducteur planetaire 9:1) ; le noeud
         # wrist_bldc rampe a 0.5 rad/s / 1.5 rad/s2. Planifier plus vite ferait
         # trainer l'axe derriere la trajectoire.
         limits["joint_5"] = {

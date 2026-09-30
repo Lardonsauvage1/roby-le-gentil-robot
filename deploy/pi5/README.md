@@ -20,15 +20,7 @@ avec ses vérifications : skill `/roby-lancer-bras` du dépôt `roby-specs`.
 
 ## Matériel piloté par le Pi5
 
-| Élément | Interface |
-|---|---|
-| Axe 1 (base) | stepper, step/dir en GPIO (`/dev/gpiochip4`, le RP1 du Pi5 — **pas** gpiochip0) |
-| Axes 2 et 3 | NEMA 34 12 Nm, drivers **CL86Y** boucle fermée, step/dir en GPIO |
-| Axe 4 (roulis poignet) | servo, PCA9685 (I2C bus 1, adresse 0x40) canal **CH0** |
-| Axe 5 (tangage poignet) | servo **provisoire**, PCA9685 **CH1** — remplaçant BLDC (carte B-G431B-ESC1 en USB, `roby_wrist_bldc`) prêt mais **non monté** |
-| Verrou de tête (changeur d'outil) | PCA9685 **CH2** |
-| Pince | PCA9685 **CH3** |
-| Caméras | 2 × ov5647 CSI (`cam0`, `cam1`) : `left` = **poignet** (`i2c@88000`), `right` = **vue extérieure** (`i2c@80000`) — vérifié sur les images le 2026-09-13 |
+Broches, canaux PCA9685, USB et caméras : voir la fiche unique [`CABLAGE.md`](../../CABLAGE.md).
 
 Alimentation des moteurs **séparée** du Pi5 (coupure physique d'urgence). Pas de fin de
 course : la référence est le **nid** (voir « Pièges »).

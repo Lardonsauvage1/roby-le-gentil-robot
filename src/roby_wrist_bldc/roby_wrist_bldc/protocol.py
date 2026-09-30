@@ -1,7 +1,7 @@
 """Protocole serie de la carte B-G431B-ESC1 (firmware SimpleFOC de l'axe 5).
 
 Toutes les positions sont en radians de l'AXE DU BRAS (sortie du reducteur
-cycloidal 20:1) : la carte fait la conversion x20 en interne.
+planetaire 9:1) : la carte fait la conversion x9 en interne.
 
 Pi -> carte (une commande par ligne, terminee par '\\n') :
     P<angle>  consigne de position absolue
@@ -28,7 +28,7 @@ from typing import Optional, Union
 
 # Nombre de decimales envoyees. La carte les lit avec atof() dans un buffer de
 # 31 caracteres : 5 decimales = 1e-5 rad bras, largement sous la resolution
-# AS5600 ramenee au bras (2*pi / 4096 / 20 = 7.7e-5 rad).
+# AS5600 ramenee au bras (2*pi / 4096 / 9 = 1.7e-4 rad).
 COMMAND_DECIMALS = 5
 
 # Au-dela, atof() de la carte tronquerait la ligne (cmdBuf[32]).

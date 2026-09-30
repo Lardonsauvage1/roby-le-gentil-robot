@@ -4,7 +4,7 @@ Use this on the PC when move_group and ros2_control both run on the Pi5.
 RViz subscribes to /joint_states and /tf via DDS to display the robot state.
 
 Usage (PC):
-    export CYCLONEDDS_URI='<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="enp87s0"/></Interfaces><AllowMulticast>true</AllowMulticast></General><Discovery><Peers><Peer address="192.168.1.37"/></Peers></Discovery></Domain></CycloneDDS>'
+    export CYCLONEDDS_URI=file:///home/sam/cyclone_config.xml   # pair Pi5 : deploy/pc/
     export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
     export ROS_DOMAIN_ID=42
     unset GTK_PATH

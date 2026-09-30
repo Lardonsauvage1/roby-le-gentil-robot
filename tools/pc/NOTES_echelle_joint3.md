@@ -94,7 +94,7 @@ moteur et pas le cartésien. Mais la conversion doit défaire la compensation d'
 1. **Re-mesurer** l'écart au coin proche-droit à la règle (les deux estimations diffèrent de 1 cm).
 2. **Compter les dents** de la poulie de sortie de joint_3 (config : 20/32).
 3. **Inclinomètre** : joint_3 seul, deux angles, pour séparer échelle et couplage.
-4. Corriger la **config du driver** (`roby_hardware.ros2_control.xacro`) plutôt que ce
+4. Corriger la **config du driver** (`roby_hardware_steppers_only.ros2_control.xacro`) plutôt que ce
    contournement — ça corrigerait aussi MoveIt, RViz, le jog et le garde.
 5. Après correction : **re-référencer au nid** et re-vérifier les poses capturées avec
    l'ancien rapport (`changeur_outil`, `D_pose_cone`, `nid`).

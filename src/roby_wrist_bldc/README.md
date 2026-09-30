@@ -1,6 +1,6 @@
 # roby_wrist_bldc — axe 5 (poignet) BLDC
 
-Moteur LA8308 KV90 (20 paires de pôles) + réducteur cycloïdal 20:1, AS5600 (I2C) sur l'arbre
+Moteur LA8308 KV90 (20 paires de pôles) + réducteur planétaire 9:1, AS5600 (I2C) sur l'arbre
 moteur, carte B-G431B-ESC1 sous SimpleFOC (firmware : projet PlatformIO `test_bldc`), bus 24 V,
 USB série 115200 bauds vers le Pi5. **Toutes les positions sont en rad de l'axe du bras.**
 

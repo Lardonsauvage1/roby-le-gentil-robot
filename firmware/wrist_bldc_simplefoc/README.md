@@ -1,19 +1,15 @@
 # Firmware de la carte du poignet BLDC (axe 5) — B-G431B-ESC1 / SimpleFOC
 
-Copie **telle quelle** du projet PlatformIO `~/Documents/PlatformIO/Projects/test_bldc` du PC
-(`src/main.cpp` du 2026-09-12 01:40, md5 `baa213a3cef034ed39b81f21d42399c8`), versionnée ici le
-2026-09-12 pour que la spec et le driver puissent y renvoyer. **Aucune modification.**
-
-- Le code collé par Sam dans la session du 2026-09-12 correspond à ce fichier, vérifié sur les
-  passages clés (`RECALE`, `offset_bras`, `STALL_CURRENT`, `velocity_limit`).
-- Que ce soit exactement la version **flashée** sur la carte n'a **pas** été vérifié.
-- D'après Sam, la carte fonctionne en boucle fermée. Claude ne l'a pas vue tourner : l'axe n'était
-  pas monté.
+**Seule copie du firmware.** Ouvrir ce dossier dans PlatformIO pour compiler/flasher.
+L'ancien projet `~/Documents/PlatformIO/Projects/test_bldc` du PC a été rapatrié ici le
+2026-09-30 puis supprimé (version du 2026-09-24 : réducteur 9:1, alimentation 12 V, traces de
+démarrage `BOOT` / `initFOC=`), c'est celle qui a été flashée et testée sur la carte ce jour-là.
 
 ## Matériel
 
-LA8308 KV90 (20 paires de pôles) + réducteur cycloïdal 20:1, AS5600 en I2C sur l'arbre moteur
-(PB7/PB8, 400 kHz), carte B-G431B-ESC1 (STM32G431), bus 24 V, USB (ST-LINK VCP) 115200 bauds.
+LA8308 KV90 (20 paires de pôles) + réducteur **planétaire 9:1**, AS5600 en I2C sur l'arbre moteur
+(PB7/PB8, 400 kHz), carte B-G431B-ESC1 (STM32G431), bus **12 V** (à 24 V la carte chauffait trop),
+USB (ST-LINK VCP) 115200 bauds. Vitesse maxi : 15 rad/s moteur = 1,67 rad/s bras.
 
 ## Compiler / flasher
 
@@ -26,10 +22,15 @@ pio device monitor      # 115200 : trames "S <pos> <courant> <défaut>" à ~50 H
 
 ## Protocole
 
-Positions en **rad de l'axe du bras** (la carte applique ×20). `P<angle>` consigne, `Z<angle>`
+Positions en **rad de l'axe du bras** (la carte applique ×9). `P<angle>` consigne, `Z<angle>`
 recalage sans mouvement, `S` stop, `E` enable, `R` reset défaut, `?` position. Réponses :
 `RECALE`, `POS`, `ENABLED`, `DISABLED`, `RESET`, `FAULT STALL`, `READY`.
 Côté Pi : `src/roby_wrist_bldc` (driver, simulateur fidèle à ce firmware, nœud ROS).
+
+## Test d'endurance
+
+`logs/endurance.py [port]` (défaut `/dev/roby_wrist`) — **fait bouger l'axe** ; journal du
+2026-09-24 dans `logs/endurance_20260924.log`.
 
 ## ⚠️ Défauts connus — NON corrigés dans ce code
 

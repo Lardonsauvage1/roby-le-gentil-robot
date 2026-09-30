@@ -29,8 +29,8 @@ arm_controller:
     allow_integration_in_goal_trajectories: true
     action_monitor_rate: 20.0
     # Open-loop tracking : le controller envoie la trajectoire planifiee sans
-    # correction depuis la position mesuree. Necessite quand le bruit residuel
-    # encoder ferait osciller un closed-loop. Pour la derive sous gravite
-    # (joint_2/3), addresser cote hardware : current de hold DM860I + SW5
-    # (current-decrease) OFF pour maintenir le couple max apres inactivite.
+    # correction depuis l'etat publie. Le plugin ne recoit aucune mesure des
+    # axes 1-3 (position = compteur de pas) : un closed-loop cote controller
+    # n'apporterait rien. Les axes 2/3 (NEMA34 + CL86Y) bouclent en interne
+    # sur leur propre codeur.
     open_loop_control: true

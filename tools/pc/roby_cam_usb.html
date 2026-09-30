@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Caméra USB OV4689 — réglage</title>
+<style>
+  :root { --bg:#16181c; --panel:#1f2228; --txt:#e6e6e6; --dim:#8a8f98; --ok:#4caf7a; --warn:#e0a030; --bad:#e05555; --acc:#5b9bd5; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font:13px system-ui, sans-serif; }
+  main { display:flex; gap:12px; padding:12px; align-items:flex-start; }
+  #vue { flex:1; min-width:0; }
+  #cadre { position:relative; background:#000; line-height:0; }
+  #cadre img { width:100%; height:auto; display:block; }
+  #cadre svg { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  #barre { display:flex; flex-wrap:wrap; gap:14px; align-items:center; padding:8px 2px; }
+  #panneau { width:390px; flex-shrink:0; background:var(--panel); border-radius:6px; padding:10px; max-height:calc(100vh - 24px); overflow-y:auto; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:14px 0 6px; }
+  h2:first-child { margin-top:0; }
+  .mes { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+  .mes div { background:#2a2e36; border-radius:4px; padding:6px; }
+  .mes b { display:block; font-size:18px; font-variant-numeric:tabular-nums; }
+  .mes span { color:var(--dim); font-size:11px; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+  canvas { width:100%; height:60px; background:#2a2e36; border-radius:4px; margin-top:6px; display:block; }
+  .ctl { display:grid; grid-template-columns:1fr 70px; gap:2px 8px; align-items:center; padding:5px 0; border-bottom:1px solid #2c3038; }
+  .ctl label { grid-column:1/-1; display:flex; justify-content:space-between; }
+  .ctl label small { color:var(--dim); }
+  .ctl.inactif { opacity:.4; }
+  .ctl.auto label { color:var(--warn); }
+  input[type=range] { width:100%; }
+  input[type=number], input[type=text], select { width:100%; background:#2a2e36; color:var(--txt); border:1px solid #3a3f49; border-radius:3px; padding:3px; }
+  button { background:#2f3440; color:var(--txt); border:1px solid #454b58; border-radius:4px; padding:6px 10px; cursor:pointer; }
+  button:hover { border-color:var(--acc); }
+  button.prim { background:var(--acc); border-color:var(--acc); color:#fff; }
+  .ligne { display:flex; gap:6px; margin:6px 0; }
+  #msg { min-height:1.4em; color:var(--dim); margin-top:6px; word-break:break-all; }
+  #muette { display:none; position:absolute; inset:0; align-items:center; justify-content:center; background:#000a; color:var(--bad); font-size:22px; line-height:1.2; }
+  @media (max-width: 800px) { main { flex-direction:column; padding:6px; } #panneau { width:100%; max-height:none; } }
+</style></head>
+<body><main>
+<section id="vue">
+  <div id="cadre">
+    <img id="flux" alt="flux caméra">
+    <svg id="calque" viewBox="0 0 1600 900" preserveAspectRatio="none"></svg>
+    <div id="muette">⚠ caméra muette : plus aucune image reçue</div>
+  </div>
+  <div id="barre">
+    <label>Repère :
+      <select id="repere">
+        <option value="aucun">aucun</option><option value="tiers" selected>tiers</option>
+        <option value="grille">grille 8×8</option><option value="croix">croix centrale</option>
+      </select></label>
+    <label>Aperçu :
+      <select id="largeur">
+        <option value="960">960 px</option><option value="1280" selected>1280 px</option><option value="1920">1920 px (plein)</option>
+      </select></label>
+    <span id="fmt" style="color:var(--dim)"></span>
+    <span id="decro"></span>
+  </div>
+</section>
+
+<aside id="panneau">
+  <h2>Mesures en direct</h2>
+  <div class="mes">
+    <div><b id="m_fps">–</b><span>fps réels</span></div>
+    <div><b id="m_lum">–</b><span>luminance 0–255</span></div>
+    <div><b id="m_bgr">–</b><span>B / V / R</span></div>
+    <div><b id="m_noir">–</b><span>% noirs (&lt;10)</span></div>
+    <div><b id="m_blanc">–</b><span>% cramés (&gt;245)</span></div>
+    <div><b id="m_expo">–</b><span>exposition</span></div>
+  </div>
+  <canvas id="histo" width="380" height="60"></canvas>
+
+  <h2>Préréglages</h2>
+  <div class="ligne"><input id="p_nom" type="text" value="ov4689" title="nom du fichier"><button class="prim" id="b_save">Figer</button></div>
+  <div class="ligne"><select id="p_liste"></select><button id="b_load">Appliquer</button></div>
+  <div class="ligne"><button id="b_defaut">Réglages d'usine</button></div>
+
+  <h2>Capture pour comparer les emplacements</h2>
+  <div class="ligne"><input id="c_label" type="text" placeholder="étiquette (ex. emplacement_A)"><button id="b_cap">Capture</button></div>
+  <div id="msg"></div>
+
+  <h2>Contrôles de la caméra</h2>
+  <div id="ctls"></div>
+</aside>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const AUTOS = ["auto_exposure","exposure_dynamic_framerate","white_balance_automatic","focus_automatic_continuous"];
+const AIDE = {
+  auto_exposure: "1 = manuel (à garder), 3 = auto",
+  exposure_time_absolute: "unité 100 µs · ≤ 333 pour tenir 30 fps · multiple de 100 = sans scintillement 50 Hz",
+  exposure_dynamic_framerate: "si 1, l'auto peut baisser les fps : garder à 0",
+  gain: "⚠ sans effet mesurable en exposition manuelle",
+  power_line_frequency: "1 = 50 Hz (France)",
+  white_balance_temperature: "en kelvins (bas = corrige vers le bleu)",
+  focus_absolute: "à tester : peut être sans effet sur objectif M12",
+  brightness: "décalage numérique, pas de la vraie lumière",
+  gamma: "courbe numérique",
+};
+let ctls = [], occupe = false, etaitCoupe = false;
+
+function msg(t, cls) { $("msg").textContent = t; $("msg").className = cls || ""; }
+
+async function post(url) {
+  const r = await fetch(url, {method: "POST"});
+  const j = await r.json();
+  if (j.controls) { ctls = j.controls; rendre(); }
+  return j;
+}
+
+function rendre() {
+  const box = $("ctls");
+  box.innerHTML = "";
+  for (const c of ctls) {
+    const d = document.createElement("div");
+    const estAuto = AUTOS.includes(c.key) && ((c.key === "auto_exposure" && c.value !== 1) || (c.key !== "auto_exposure" && c.value === 1));
+    d.className = "ctl" + (c.inactive ? " inactif" : "") + (estAuto ? " auto" : "");
+    let unite = "";
+    if (c.key === "exposure_time_absolute") unite = ` = ${(c.value / 10).toFixed(1)} ms`;
+    d.innerHTML = `<label><span>${c.name}${estAuto ? " (AUTO)" : ""}</span><small>défaut ${c.default}${unite}</small></label>`;
+    let champ;
+    const envoyer = v => post(`/api/set?key=${c.key}&value=${v}`).then(j => { if (!j.ok) msg("refusé : " + j.erreur, "bad"); else msg(`${c.name} → relu ${j.relu}`); });
+    if (c.type === "menu") {
+      champ = document.createElement("select");
+      for (const [k, v] of Object.entries(c.menu)) champ.add(new Option(`${k} = ${v}`, k, false, +k === c.value));
+      champ.onchange = () => envoyer(champ.value);
+      champ.style.gridColumn = "1/-1";
+      d.append(champ);
+    } else if (c.type === "bool") {
+      champ = document.createElement("input"); champ.type = "checkbox"; champ.checked = !!c.value;
+      champ.onchange = () => envoyer(champ.checked ? 1 : 0);
+      d.append(champ);
+    } else {
+      const r = document.createElement("input"); r.type = "range"; r.min = c.min; r.max = c.max; r.step = c.step || 1; r.value = c.value;
+      const n = document.createElement("input"); n.type = "number"; n.min = c.min; n.max = c.max; n.value = c.value;
+      r.oninput = () => { n.value = r.value; occupe = true; };
+      r.onchange = () => { occupe = false; envoyer(r.value); };
+      n.onchange = () => envoyer(n.value);
+      r.disabled = n.disabled = c.inactive;
+      d.append(r, n);
+    }
+    if (AIDE[c.key]) { const s = document.createElement("small"); s.style.cssText = "grid-column:1/-1;color:var(--dim)"; s.textContent = AIDE[c.key]; d.append(s); }
+    box.append(d);
+  }
+}
+
+function colore(el, v, okMax, warnMax) { el.className = v <= okMax ? "ok" : v <= warnMax ? "warn" : "bad"; }
+
+async function tick() {
+  try {
+    const j = await (await fetch("/api/state")).json();
+    const s = j.stats;
+    $("muette").style.display = s.muette ? "flex" : "none";
+    // Flux MJPEG coupé (caméra décrochée ou serveur relancé) : le relancer au retour.
+    if (etaitCoupe && !s.muette) flux();
+    etaitCoupe = s.muette;
+    $("m_fps").textContent = s.fps.toFixed(1);
+    $("m_fps").className = s.fps >= 29 ? "ok" : s.fps >= 25 ? "warn" : "bad";
+    if (s.lum !== undefined) {
+      $("m_lum").textContent = s.lum;
+      $("m_lum").className = (s.lum >= 90 && s.lum <= 160) ? "ok" : (s.lum >= 60 && s.lum <= 190) ? "warn" : "bad";
+      $("m_bgr").textContent = s.bgr.join("/");
+      $("m_noir").textContent = s.noir_pct; colore($("m_noir"), s.noir_pct, 2, 10);
+      $("m_blanc").textContent = s.blanc_pct; colore($("m_blanc"), s.blanc_pct, 1, 5);
+      histo(s.hist);
+    }
+    const n = s.decrochages.length;
+    $("decro").textContent = n ? `⚠ ${n} décrochage(s) USB : ${s.decrochages.join(", ")} (réglages remis)` : "0 décrochage USB";
+    $("decro").className = n ? "bad" : "ok";
+    const d = s.derives || [];
+    if (d.length) { const x = d[d.length - 1]; $("decro").textContent += ` · ⚠ ${d.length} dérive(s) remise(s), dernière ${x[0]} : ${x[1]} ${x[2]}→${x[3]}`; $("decro").className = "bad"; }
+    $("fmt").textContent = `${j.dev} · ${s.format[0]}×${s.format[1]} MJPG @${s.format[2]} demandé`;
+    const e = j.controls.find(c => c.key === "exposure_time_absolute"), a = j.controls.find(c => c.key === "auto_exposure");
+    $("m_expo").textContent = a && a.value !== 1 ? "AUTO" : e ? (e.value / 10).toFixed(1) + " ms" : "–";
+    $("m_expo").className = a && a.value !== 1 ? "warn" : "";
+    const liste = $("p_liste"), cur = liste.value;
+    if (liste.options.length !== j.presets.length) {
+      liste.innerHTML = ""; for (const p of j.presets) liste.add(new Option(p, p, false, p === cur));
+    }
+    if (!occupe && JSON.stringify(j.controls) !== JSON.stringify(ctls) && !document.activeElement.closest("#ctls")) { ctls = j.controls; rendre(); }
+  } catch (e) { $("muette").style.display = "flex"; etaitCoupe = true; }
+}
+
+function histo(h) {
+  const cv = $("histo"), g = cv.getContext("2d"), w = cv.width / h.length;
+  g.clearRect(0, 0, cv.width, cv.height);
+  h.forEach((v, i) => { g.fillStyle = i < 3 ? "#e05555" : i > 60 ? "#e0a030" : "#8a8f98"; g.fillRect(i * w, cv.height * (1 - v), w - 1, cv.height * v); });
+}
+
+function repere() {
+  const m = $("repere").value, s = $("calque"); let h = "";
+  const L = (x1, y1, x2, y2, c = "#ffffff99", w = 2) => h += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c}" stroke-width="${w}"/>`;
+  if (m === "tiers") { for (const k of [1, 2]) { L(1600 * k / 3, 0, 1600 * k / 3, 900); L(0, 900 * k / 3, 1600, 900 * k / 3); } }
+  if (m === "grille") { for (let k = 1; k < 8; k++) { L(200 * k, 0, 200 * k, 900, "#ffffff55", 1.5); L(0, 112.5 * k, 1600, 112.5 * k, "#ffffff55", 1.5); } }
+  if (m === "croix" || m === "tiers" || m === "grille") { L(770, 450, 830, 450, "#ff4040", 3); L(800, 420, 800, 480, "#ff4040", 3); }
+  if (m === "croix") { L(800, 0, 800, 900, "#ff404066", 1.5); L(0, 450, 1600, 450, "#ff404066", 1.5); }
+  s.innerHTML = h;
+}
+
+function flux() { $("flux").src = `/stream.mjpg?w=${$("largeur").value}&t=${Date.now()}`; }
+
+$("repere").onchange = repere;
+$("largeur").onchange = flux;
+$("flux").onerror = () => setTimeout(flux, 1000);
+$("b_save").onclick = async () => { const j = await post(`/api/preset/save?name=${encodeURIComponent($("p_nom").value)}`); msg(j.ok ? "figé → " + j.fichier : "erreur : " + j.erreur, j.ok ? "ok" : "bad"); };
+$("b_load").onclick = async () => { const j = await post(`/api/preset/load?file=${encodeURIComponent($("p_liste").value)}`); msg(j.ok ? "appliqué" + (Object.keys(j.ecarts).length ? " — ÉCARTS " + JSON.stringify(j.ecarts) : ", relu identique") : "erreur : " + j.erreur, j.ok ? "ok" : "bad"); };
+$("b_defaut").onclick = async () => { const j = await post("/api/defaults"); msg(j.ok ? "réglages d'usine remis (auto réactivé)" : "erreur : " + j.erreur, j.ok ? "warn" : "bad"); };
+$("b_cap").onclick = async () => { const j = await post(`/api/capture?label=${encodeURIComponent($("c_label").value)}`); msg(j.ok ? "capture → " + j.fichier : "erreur : " + j.erreur, j.ok ? "ok" : "bad"); };
+
+repere(); flux(); tick(); setInterval(tick, 500);
+</script>
+</body></html>

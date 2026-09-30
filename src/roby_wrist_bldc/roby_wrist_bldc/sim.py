@@ -6,8 +6,8 @@ le comportement de test_bldc/src/main.cpp :
 - trame "S <pos> <courant> <defaut>" toutes les 20 ms ;
 - commandes P, Z, S, E, R, ? et leurs reponses, y compris les pieges du
   firmware (atof() : "P" sans nombre vise 0.0 ; buffer de 31 caracteres) ;
-- asservissement de position simplifie : v = 8 * erreur, |v| <= 0.75 rad/s
-  bras (P_angle.P = 8, velocity_limit = 15 rad/s moteur / 20) ;
+- asservissement de position simplifie : v = 8 * erreur, |v| <= 1.67 rad/s
+  bras (P_angle.P = 8, velocity_limit = 15 rad/s moteur / 9) ;
 - watchdog blocage : |I| > 2.5 A pendant 2 s => "FAULT STALL", moteur coupe.
 
 Sert aux tests (sans materiel) et au mode `simulate` du noeud ROS. Des
@@ -33,14 +33,14 @@ def c_atof(text: str) -> float:
 class SimulatedBoard:
     """Emulation temps reel (horloge murale) de la carte, pas de thread interne."""
 
-    GEAR_RATIO = 20.0
+    GEAR_RATIO = 9.0
 
     def __init__(
         self,
         start_position: float = 0.0,
         status_period_s: float = 0.02,
         p_gain: float = 8.0,
-        velocity_limit: float = 15.0 / 20.0,
+        velocity_limit: float = 15.0 / 9.0,
         stall_current: float = 2.5,
         stall_time_s: float = 2.0,
         emit_ready: bool = True,
@@ -53,7 +53,7 @@ class SimulatedBoard:
         self.stall_time_s = stall_time_s
 
         # position_bras = shaft_angle / GEAR_RATIO + offset_bras
-        # ici `raw` = shaft_angle / 20
+        # ici `raw` = shaft_angle / 9
         self.raw = start_position
         self.offset = 0.0
         self.target = start_position

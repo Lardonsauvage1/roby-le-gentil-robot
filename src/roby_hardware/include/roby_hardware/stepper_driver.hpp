@@ -21,7 +21,7 @@ struct StepperConfig
   int steps_per_rev = 12800; // motor-side microstepping
   bool inverted = false;
   bool mock = false;
-  std::string gpio_chip = "/dev/gpiochip0";
+  std::string gpio_chip = "/dev/gpiochip4";
 };
 
 class StepperDriver

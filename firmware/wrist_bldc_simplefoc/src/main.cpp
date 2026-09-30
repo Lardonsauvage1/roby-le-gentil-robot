@@ -7,8 +7,8 @@ BLDCDriver6PWM driver = BLDCDriver6PWM(A_PHASE_UH, A_PHASE_UL, A_PHASE_VH, A_PHA
 MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
 LowsideCurrentSense currentSense = LowsideCurrentSense(0.003f, -64.0f/7.0f, A_OP1_OUT, A_OP2_OUT, A_OP3_OUT);
 
-// --- Reducteur ---
-const float GEAR_RATIO = 20.0;   // 20 tours moteur = 1 tour bras
+// --- Reducteur planetaire 9:1 ---
+const float GEAR_RATIO = 9.0;    // 9 tours moteur = 1 tour bras
 
 // --- Protections ---
 float STALL_CURRENT = 2.5;
@@ -38,16 +38,22 @@ float getPositionBras() {
 void setup() {
     Serial.begin(115200);
     delay(2000);
+    SimpleFOCDebug::enable(&Serial);
+    Serial.println("BOOT");
 
     Wire.setSDA(PB7);
     Wire.setSCL(PB8);
     Wire.begin();
     Wire.setClock(400000);
+    Serial.println("INIT capteur...");
     sensor.init(&Wire);
+    Serial.print("capteur OK, angle=");
+    Serial.println(sensor.getAngle(), 4);
 
-    driver.voltage_power_supply = 24;
-    driver.voltage_limit = 24;
-    driver.init();
+    driver.voltage_power_supply = 12;
+    driver.voltage_limit = 12;
+    Serial.print("driver.init=");
+    Serial.println(driver.init());
 
     motor.linkDriver(&driver);
     motor.linkSensor(&sensor);
@@ -67,7 +73,8 @@ void setup() {
     motor.init();
     currentSense.init();
     motor.linkCurrentSense(&currentSense);
-    motor.initFOC();
+    Serial.print("initFOC=");
+    Serial.println(motor.initFOC());
 
     // Au demarrage : consigne = position actuelle (pas de saut)
     target_bras = getPositionBras();

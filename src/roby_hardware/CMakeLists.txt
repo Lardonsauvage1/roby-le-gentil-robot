@@ -6,7 +6,6 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
-find_package(ament_index_cpp REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -31,7 +30,6 @@ add_library(${PROJECT_NAME} SHARED
   src/stepper_driver.cpp
   src/servo_driver.cpp
   src/safety_monitor.cpp
-  src/encoder_driver.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -46,7 +44,6 @@ if(HAS_GPIOD)
 endif()
 
 ament_target_dependencies(${PROJECT_NAME}
-  ament_index_cpp
   hardware_interface
   pluginlib
   rclcpp
@@ -73,12 +70,6 @@ if(HAS_GPIOD)
   target_link_libraries(test_stepper_hw ${GPIOD_LIBRARY})
   target_compile_definitions(test_stepper_hw PRIVATE HAS_GPIOD)
   install(TARGETS test_stepper_hw DESTINATION lib/${PROJECT_NAME})
-
-  add_executable(test_encoder_driver_hw test/test_encoder_driver_hw.cpp src/encoder_driver.cpp)
-  target_include_directories(test_encoder_driver_hw PUBLIC include ${GPIOD_INCLUDE_DIR})
-  target_link_libraries(test_encoder_driver_hw ${GPIOD_LIBRARY})
-  target_compile_definitions(test_encoder_driver_hw PRIVATE HAS_GPIOD)
-  install(TARGETS test_encoder_driver_hw DESTINATION lib/${PROJECT_NAME})
 endif()
 
 # Tests
@@ -96,16 +87,8 @@ if(BUILD_TESTING)
   ament_add_gtest(test_safety_monitor test/test_safety_monitor.cpp src/safety_monitor.cpp)
   target_include_directories(test_safety_monitor PUBLIC include)
   ament_target_dependencies(test_safety_monitor rclcpp)
-
-  # PID closed-loop (header-only pid.hpp) — pur, sans hardware ni deps ROS
-  ament_add_gtest(test_pid test/test_pid.cpp)
-  target_include_directories(test_pid PUBLIC include)
-
-  # Filtre rejet d'outliers + porte de sortie (header-only) — pur, sans hardware
-  ament_add_gtest(test_outlier_filter test/test_outlier_filter.cpp)
-  target_include_directories(test_outlier_filter PUBLIC include)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME})
-ament_export_dependencies(ament_index_cpp hardware_interface pluginlib rclcpp rclcpp_lifecycle std_msgs)
+ament_export_dependencies(hardware_interface pluginlib rclcpp rclcpp_lifecycle std_msgs)
 ament_package()

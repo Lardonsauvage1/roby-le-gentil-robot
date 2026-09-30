@@ -109,7 +109,7 @@ class DriverConfig:
     # Butees logicielles (URDF joint_5 : [-1.6, 1.6] rad).
     position_min: float = -1.6
     position_max: float = 1.6
-    # Rampe. La carte plafonne a velocity_limit = 15 rad/s moteur = 0.75 rad/s bras ;
+    # Rampe. La carte plafonne a velocity_limit = 15 rad/s moteur = 1.67 rad/s bras ;
     # on reste en dessous pour qu'elle suive la consigne sans trainer.
     max_velocity: float = 0.5
     max_acceleration: float = 1.5
@@ -333,7 +333,7 @@ class WristBldcDriver:
     def set_position(self, angle_rad: float) -> None:
         """Envoie immediatement P<angle> (sans rampe). Interrompt un mouvement en cours.
 
-        La carte limite elle-meme la vitesse (0.75 rad/s bras) mais sans rampe
+        La carte limite elle-meme la vitesse (1.67 rad/s bras) mais sans rampe
         d'acceleration cote Pi : preferer move_to() pour les grands deplacements.
         """
         self._check_limits(angle_rad)

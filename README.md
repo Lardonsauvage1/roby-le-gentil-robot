@@ -24,10 +24,11 @@ Reconstruire une machine : [`deploy/pi5/README.md`](deploy/pi5/README.md),
 | `src/roby_environments` | scènes de collision MoveIt (`cuisine`, 35 obstacles ; `atelier_actuel`) |
 | `src/roby_control` | bras guide SO-ARM 101 (`leader_node`, correspondance, joystick) et téléopérations : bras **simulé** (`leader_teleop_sim`, `_pos`, `_cart`) et **vrai** bras via le garde (`leader_teleop_reel`) ; nœuds ArUco / suivi visuel (non modifiés depuis juin 2026) |
 | `src/roby_wrist_bldc` | poignet axe 5 BLDC (carte B-G431B-ESC1 + SimpleFOC) : driver série, nœud ROS, pont vers `RobySystem` — **pas encore monté sur le robot** |
-| `firmware/wrist_bldc_simplefoc` | firmware PlatformIO de la carte du poignet BLDC |
+| `firmware/wrist_bldc_simplefoc` | firmware PlatformIO de la carte du poignet BLDC — **seule copie** |
 | `tools/pc`, `tools/pi5` | outillage opérationnel de chaque machine, appelé par des liens depuis le home — voir [`tools/README.md`](tools/README.md) |
+| `CABLAGE.md` | **fiche unique** du câblage et de l'adressage (GPIO, I2C, USB, réseau) |
 | `deploy/` | ce qu'il faut sur chaque machine en dehors du workspace (DDS, système, udev…) |
-| `demo/`, `hot_reload_urdf.py` | démonstration de juin 2026 et outil de mise au point de l'URDF : historiques |
+| `hot_reload_urdf.py` | outil de mise au point de l'URDF : historique |
 | `launch_sim.sh` | MoveIt seul avec un robot simulé (`demo.launch.py`), sur le domaine **43** |
 
 ## Lancer le vrai bras
