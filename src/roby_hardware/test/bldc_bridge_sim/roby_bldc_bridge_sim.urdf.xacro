@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<!--
+  Banc logiciel du pont BLDC (axe 5) : RobySystem avec joint_1..4 en mock et
+  joint_5 en bldc, relie au noeud roby_wrist_bldc en simulate:=true.
+  AUCUN materiel : pas de stepper (pas de GPIO), i2c_bus inexistant => servos
+  verrou/pince en mock (le PC a de vrais /dev/i2c-* qu'il ne faut pas ecrire).
+  Utilise par test_bldc_bridge_sim.py.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="neuroneimitationcarote">
+    <xacro:arg name="nest" default="0.2009" />
+    <xacro:include filename="$(find neuroneimitationcarote_description)/urdf/robot.urdf.xacro" />
+
+    <xacro:macro name="sim_joint" params="name initial">
+        <joint name="${name}">
+            <command_interface name="position"/>
+            <state_interface name="position">
+                <param name="initial_value">${initial}</param>
+            </state_interface>
+            <state_interface name="velocity"/>
+        </joint>
+    </xacro:macro>
+
+    <ros2_control name="RobySystem" type="system">
+        <hardware>
+            <plugin>roby_hardware/RobySystem</plugin>
+            <param name="joint_1_type">mock</param>
+            <param name="joint_2_type">mock</param>
+            <param name="joint_3_type">mock</param>
+            <param name="joint_4_type">mock</param>
+            <param name="joint_5_type">bldc</param>
+            <param name="joint_5_bldc_wait_on_activate_s">8.0</param>
+            <param name="i2c_bus">/dev/roby_test_pas_de_i2c</param>
+            <param name="coupling_enabled">false</param>
+        </hardware>
+        <xacro:sim_joint name="joint_1" initial="0.0"/>
+        <xacro:sim_joint name="joint_2" initial="0.0"/>
+        <xacro:sim_joint name="joint_3" initial="0.0"/>
+        <xacro:sim_joint name="joint_4" initial="0.0"/>
+        <xacro:sim_joint name="joint_5" initial="$(arg nest)"/>
+    </ros2_control>
+</robot>

@@ -20,6 +20,7 @@ import time
 import yaml
 
 import rclpy
+import roby_gates
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from moveit_msgs.action import MoveGroup
@@ -125,6 +126,8 @@ def main():
 
     rclpy.init()
     n = Seq(vel, acc, dry=dry)
+    if not dry:
+        roby_gates.exiger(n, "roby_moveit_seq", scene=True)  # MoveIt sans scene = sans anti-collision
     if dry:
         print("*** MODE DRY : planification seule, AUCUN mouvement ***")
     try:

@@ -41,12 +41,41 @@ torch.set_num_threads(6)
 import numpy as np
 import cv2
 
-sys.path.insert(0, os.path.expanduser("~"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 from roby_oracle import fkT, LIMITS                      # FK = celle du dataset
 from roby_tool_pickup import dls, rotvec                 # IK amortie + rotation-vector
 # Pretraitement PARTAGE : meme implementation que roby_infer.py (cf roby_vision.py).
 # Le crop interne 84/112 est applique par LeRobot en eval() : ne PAS cropper ici.
 from roby_vision import decode_resize, image_keys, img_size_from_policy
+
+# --- Compensation d'echelle de joint_3 (2026-09-07) --------------------------
+# Le robot est commande en consigne COMPENSEE (joint_3 ne parcourt que J3_SCALE de la
+# course demandee, cf. NOTES_echelle_joint3.md). Le DATASET, lui, contient l'etat en
+# espace MODELE : `roby_dataset_to_cartesian.py --j3-scale` de-compense avant la FK.
+# Pour que le modele voie a l'inference EXACTEMENT ce qu'il a vu a l'entrainement, il
+# faut donc de-compenser l'observation ET re-compenser la consigne. Sans ca l'ecart
+# est de 15 mm medians, jusqu'a 33 mm (mesure) -- le modele travaille sur une geometrie
+# qui n'est pas la sienne. Opt-in : sans ROBY_J3_SCALE, ces deux fonctions ne font rien.
+J3_SCALE = float(os.environ.get("ROBY_J3_SCALE", "0") or 0)
+J3_REF = float(os.environ.get("ROBY_J3_REF", "0.5237"))
+
+
+def j3_vers_modele(q):
+    """Consigne lue sur /joint_states -> espace modele (= ce que le dataset contient)."""
+    if J3_SCALE <= 0:
+        return q
+    q = np.array(q, float).copy()
+    q[2] = J3_REF + J3_SCALE * (q[2] - J3_REF)
+    return q
+
+
+def j3_vers_robot(q):
+    """Espace modele -> consigne a envoyer au robot (inverse de j3_vers_modele)."""
+    if J3_SCALE <= 0:
+        return q
+    q = np.array(q, float).copy()
+    q[2] = J3_REF + (q[2] - J3_REF) / J3_SCALE
+    return q
 from roby_gripper import fermer as pince_fermer   # hysteresis : anti-claquement
 
 import rclpy
@@ -63,7 +92,8 @@ from std_srvs.srv import Trigger, SetBool
 
 from lerobot.policies.diffusion.modeling_diffusion import DiffusionPolicy
 from lerobot.policies.factory import make_pre_post_processors
-from lerobot.utils.constants import OBS_STATE
+from lerobot.utils.constants import OBS_STATE, OBS_IMAGES, ACTION
+from lerobot.policies.utils import populate_queues
 
 J = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
 
@@ -106,14 +136,19 @@ class InferCart(Node):
         self.img_keys = image_keys(self.policy)
         self.img_size = img_size_from_policy(self.policy, a.img_size)
 
-        # GARDE-FOU : ce noeud suppose etat 6D + action 7D. Si le checkpoint ne colle pas,
-        # c'est un modele JOINT -> refuser plutot que d'envoyer n'importe quoi au bras.
+        # GARDE-FOU : ce noeud accepte DEUX familles cartesiennes et rien d'autre.
+        #   6/7 : etat = pose TCP seule. Le modele ne voit pas sa pince.
+        #   7/7 : etat = pose TCP + etat de pince (0 ouvert / 1 ferme), encodage releve
+        #         dans le corpus le 2026-09-10. Le modele voit donc ce qu'il tient.
+        # Tout le reste est un modele joint ou inconnu -> refuser plutot que d'envoyer
+        # n'importe quoi au bras.
         sdim = int(self.policy.config.input_features["observation.state"].shape[-1])
         adim = int(self.policy.config.output_features["action"].shape[-1])
-        if (sdim, adim) != (6, 7):
+        if (sdim, adim) not in ((6, 7), (7, 7)):
             raise SystemExit(
                 f"❌ modele state={sdim} action={adim} : ce n'est PAS un modele cartesien "
-                f"(attendu 6/7). Pour un modele joint (5/6), utiliser roby_infer.py.")
+                f"(attendu 6/7 ou 7/7). Pour un modele joint (5/6), utiliser roby_infer.py.")
+        self.state_dim = sdim
 
         # Acceleration OpenVINO (iGPU Arc / NPU) : remplace le U-Net. Sur ce PC le CPU
         # deborde du cache pour les gros modeles ; l'iGPU les rend temps-reel (x12).
@@ -137,25 +172,60 @@ class InferCart(Node):
         horizon = int(self.policy.config.horizon)
         nact = int(self.policy.config.n_action_steps)
         n_obs = int(self.policy.config.n_obs_steps)
-        off = a.exec_offset if a.exec_offset >= 0 else (n_obs - 1)
-        off = max(0, min(off, horizon - nact))          # borne : le slice reste dans le horizon
-        self._exec_offset = off
+        self.horizon = horizon
         diff = self.policy.diffusion
-        def _gen_actions(batch, noise=None, _self=diff, _off=off, _nact=nact):
-            gc = _self._prepare_global_conditioning(batch)
-            acts = _self.conditional_sample(batch[OBS_STATE].shape[0], global_cond=gc, noise=noise)
-            return acts[:, _off:_off + _nact]            # slice DECALE
-        diff.generate_actions = _gen_actions
-        self.get_logger().warn(
-            f"exec-offset = {off} (horizon={horizon}, n_action={nact}) : "
-            f"execute les actions [{off}:{off+nact}] du horizon"
-            f"{'  [DEFAUT LeRobot]' if off == n_obs-1 else '  [DECALE, compensation latence]'}")
+
+        if a.rtc:
+            # --- RTC (Real-Time Chunking, principe adapte a la Diffusion Policy) ---
+            # generate_actions renvoie ici le horizon COMPLET (pas de slice) + fait de
+            # l'INPAINTING a masque doux : le prefixe deja engage pendant la latence est
+            # gele sur le plan precedent, une fenetre suivante est guidee en decroissance,
+            # le reste est libre. -> chaque nouveau chunk est CONTINU avec l'ancien
+            # (plus de saut arriere aux frontieres, cf recul regulier de l'async).
+            def _gen_rtc(batch, noise=None, _self=diff, _node=self):
+                gc = _self._prepare_global_conditioning(batch)
+                return _node._rtc_sample(_self, gc, batch[OBS_STATE].shape[0])   # horizon COMPLET
+            diff.generate_actions = _gen_rtc
+            self.get_logger().warn(
+                f"mode RTC : chunks pleine longueur ({horizon}) qui se recouvrent, "
+                f"inpainting gel={a.rtc_delay} guide={a.rtc_guide} -> continuite aux frontieres.")
+            self._exec_offset = 0
+        else:
+            # --- TEST latence : quelles actions du horizon on execute (2026-07-22) ---
+            # generate_actions de LeRobot slice actions[:, start:end] avec start = n_obs-1
+            # (=1) : on execute le futur IMMEDIAT. Mais entre l'image et l'execution reelle
+            # il s'ecoule le calcul + le pipeline, donc ces actions correspondent a une
+            # position deja depassee -> recul regulier. --exec-offset decale ce slice :
+            # offset=8 (horizon=16) execute les 8 DERNIERES actions = compensation de
+            # latence. offset<0 => defaut LeRobot (n_obs-1), comportement d'origine.
+            off = a.exec_offset if a.exec_offset >= 0 else (n_obs - 1)
+            off = max(0, min(off, horizon - nact))          # borne : le slice reste dans le horizon
+            self._exec_offset = off
+            def _gen_actions(batch, noise=None, _self=diff, _off=off, _nact=nact):
+                gc = _self._prepare_global_conditioning(batch)
+                acts = _self.conditional_sample(batch[OBS_STATE].shape[0], global_cond=gc, noise=noise)
+                return acts[:, _off:_off + _nact]            # slice DECALE
+            diff.generate_actions = _gen_actions
+            self.get_logger().warn(
+                f"exec-offset = {off} (horizon={horizon}, n_action={nact}) : "
+                f"execute les actions [{off}:{off+nact}] du horizon"
+                f"{'  [DEFAUT LeRobot]' if off == n_obs-1 else '  [DECALE, compensation latence]'}")
         self.get_logger().info(
             f"img_size={self.img_size} keys={self.img_keys} state={sdim} action={adim} "
             f"num_inference_steps={a.steps}")
 
         self.lock = threading.Lock()
-        self.left = None
+        # ⚠️ CAMERA : le dataset propre (2026-09-07) est construit sur `right`, la vue
+        # EXTERIEURE -- c'est avec elle que le modele de juillet reussissait. Les deux
+        # cotes se sont INVERSES depuis : en juillet l'exterieure sortait sur `left`,
+        # aujourd'hui sur `right`. Lire le mauvais topic ne provoque aucune erreur, le
+        # modele voit simplement la mauvaise scene et echoue de facon deroutante.
+        # Verifier la correspondance avant chaque campagne : ROBY_INFER_CAM=left|right.
+        self.cam_side = os.environ.get("ROBY_INFER_CAM", "right").strip() or "right"
+        # Le modele du 2026-09-07 attend DEUX vues. Correspondance identique a celle du
+        # convertisseur du dataset : fixed <- right (exterieure), wrist <- left (poignet).
+        self.imgs = {"right": None, "left": None}
+        self.img = None
         self.joints = None
         self.buf = deque(maxlen=64)
         self.last_action = None
@@ -171,10 +241,19 @@ class InferCart(Node):
         self.n_err_total = 0
         self.MAX_ERR = 5             # au-dela : desarmement automatique
 
+        # --- etat RTC ---
+        self._chunk_norm = None      # dernier chunk genere, espace NORMALISE [H, A] (cible d'inpainting)
+        self._pub_since_gen = 0      # actions publiees depuis l'installation de ce chunk (pointeur d'alignement)
+        self._rtc_target = None      # cible d'inpainting normalisee [1, H, A] (posee avant chaque gen)
+        self._rtc_w = None           # masque doux [H] : 1=gele, ->0=libre
+
         qos_img = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                              history=HistoryPolicy.KEEP_LAST, depth=1)
-        self.create_subscription(CompressedImage, "/head_camera/left/image_raw/compressed",
-                                 self._cl, qos_img, callback_group=self.cb)
+        for side in ("right", "left"):
+            self.create_subscription(
+                CompressedImage, f"/head_camera/{side}/image_raw/compressed",
+                (lambda sd: (lambda m: self._cimg(m, sd)))(side),
+                qos_img, callback_group=self.cb)
         self.create_subscription(JointState, "/joint_states", self._cj, 10, callback_group=self.cb)
 
         self.pub_traj = self.create_publisher(JointTrajectory, "/guard/joint_trajectory", 10)
@@ -209,9 +288,11 @@ class InferCart(Node):
                 f"modele leger ({nparam/1e6:.0f}M) : budget {budget_s:.2f}s pour "
                 f"{self.policy.config.n_action_steps} actions -> mouvement quasi continu attendu.")
 
-    def _cl(self, m):
+    def _cimg(self, m, side):
         with self.lock:
-            self.left = bytes(m.data)
+            self.imgs[side] = bytes(m.data)
+            if side == self.cam_side:
+                self.img = self.imgs[side]      # vue principale (compat mono-camera)
 
     def _cj(self, m):
         idx = {n: i for i, n in enumerate(m.name)}
@@ -219,20 +300,49 @@ class InferCart(Node):
             q = np.array([float(m.position[idx[j]]) for j in J], float)
             with self.lock:
                 self.joints = q
-            tcp = tcp_of(q)
+            # Pose REELLE, en espace MODELE (de-compensee joint_3) : la convention des
+            # bags *_cart et du dataset. Publiee jusqu'au 2026-09-13 en espace robot
+            # (jusqu'a ~3 cm d'ecart) : un enregistrement de rollouts pour DAgger aurait
+            # melange les deux reperes.
+            tcp = tcp_of(j3_vers_modele(q))
             self.pub_tcp.publish(Float64MultiArray(data=[float(v) for v in tcp]))
 
     def _get_obs(self):
         with self.lock:
-            if self.left is None or self.joints is None:
+            # cle -> cote camera ; 'wrist'/'poignet' = left, tout le reste = right
+            besoin = {k: ("left" if ("wrist" in k or "poignet" in k) else "right")
+                      for k in self.img_keys}
+            if self.joints is None or any(self.imgs[c] is None for c in besoin.values()):
                 return None
-            l = self.left
+            brut = {k: self.imgs[c] for k, c in besoin.items()}
             q = self.joints.copy()
-        state = torch.from_numpy(tcp_of(q).astype(np.float32)).unsqueeze(0).to(self.dev)
-        return {self.img_keys[0]: decode_resize(l, self.dev, self.img_size),
-                "observation.state": state}
+        # TRUCAGE ARTICULAIRE COHERENT (2026-07-22) : l'observation est la CINEMATIQUE
+        # DIRECTE de la position DE-TRUQUEE. On retire l'offset de joint_2 AVANT fkT ->
+        # le modele voit la pose TCP qu'il aurait si le trucage n'existait pas. La cle :
+        # le DLS en sortie repart AUSSI de cette position de-truquee (cf _publish_tick),
+        # donc tout le raisonnement vit dans le meme referentiel -> pas de derive.
+        # (Ma 1re tentative faussait l'obs mais laissait le DLS partir du reel = incoherent.)
+        # De-compensation joint_3 AVANT la FK : l'etat doit etre dans le meme espace
+        # que celui du dataset, sinon le modele voit une geometrie decalee de 1,5-3,3 cm.
+        q_model = j3_vers_modele(q)
+        q_model[1] -= np.radians(self.a.j2_offset)
+        vec = tcp_of(q_model)
+        if self.state_dim == 7:
+            # Le modele 7D attend l'etat de pince en 7e composante, encode 0 = ouverte,
+            # 1 = fermee (releve dans le corpus, pas suppose). La seule grandeur dont ce
+            # noeud dispose est la DERNIERE COMMANDE qu'il a envoyee, ce qui est aussi ce
+            # que le corpus enregistrait : l'oracle y notait sa commande, pas une mesure.
+            # Avant toute commande, last_grip vaut None et la pince est ouverte, comme au
+            # debut de chaque episode du corpus.
+            vec = np.concatenate([vec, [1.0 if self.last_grip else 0.0]])
+        state = torch.from_numpy(vec.astype(np.float32)).unsqueeze(0).to(self.dev)
+        obs = {k: decode_resize(v, self.dev, self.img_size) for k, v in brut.items()}
+        obs["observation.state"] = state
+        return obs
 
     def _infer_loop(self):
+        if self.a.rtc:
+            return self._infer_loop_rtc()
         if self.a.sync:
             return self._infer_loop_sync()
         period = 1.0 / self.hz
@@ -318,6 +428,118 @@ class InferCart(Node):
                     self.get_logger().error(f"{self.MAX_ERR} echecs -> DESARMEMENT AUTOMATIQUE.")
                 time.sleep(0.1)
 
+    def _rtc_sample(self, diff, global_cond, batch_size):
+        """conditional_sample + INPAINTING a masque doux (RTC). A chaque pas de debruitage,
+        on rappelle le sample vers la cible normalisee (le plan deja engage), forward-diffusee
+        au niveau de bruit courant, ponderee par le masque self._rtc_w (1=gele, ->0=libre).
+        Au dernier pas la cible est exacte => le prefixe gele == le plan precedent (continuite).
+        Sans cible (1er chunk) : echantillonnage libre = conditional_sample standard."""
+        sch = diff.noise_scheduler
+        H = self.horizon
+        A = int(self.policy.config.action_feature.shape[0])
+        # float32 en dur : avec --igpu le U-Net est un wrapper OpenVINO SANS parametres
+        # (next(unet.parameters()) leverait StopIteration) ; l'I/O OpenVINO est de toute
+        # facon en fp32. Sur CPU torch, le reste du pipeline diffusion est aussi fp32.
+        sample = torch.randn(batch_size, H, A, dtype=torch.float32, device=self.dev)
+        sch.set_timesteps(diff.num_inference_steps)
+        ts = sch.timesteps
+        tgt, w = self._rtc_target, self._rtc_w
+        if tgt is not None:
+            wexp = torch.from_numpy(w.astype(np.float32)).view(1, H, 1).to(self.dev)
+        for i, t in enumerate(ts):
+            model_output = diff.unet(sample, torch.full(sample.shape[:1], t, dtype=torch.long,
+                                                        device=self.dev), global_cond=global_cond)
+            sample = sch.step(model_output, t, sample).prev_sample
+            if tgt is not None:
+                t_next = ts[i + 1] if i + 1 < len(ts) else None
+                if t_next is not None:
+                    noised = sch.add_noise(tgt, torch.randn_like(tgt),
+                                           torch.full(sample.shape[:1], t_next, dtype=torch.long,
+                                                      device=self.dev))
+                else:
+                    noised = tgt                     # dernier pas : cible exacte -> prefixe gele fidele
+                sample = wexp * noised + (1.0 - wexp) * sample
+        return sample
+
+    def _rtc_full_chunk(self, obs):
+        """Genere le horizon COMPLET normalise sur l'obs fraiche (chemin LeRobot, mais
+        generate_actions patche renvoie tout le horizon). Retourne (chunk_norm[H,A], sortie[H,A])."""
+        self.policy.reset()
+        b = dict(self.pre(obs))
+        b.pop(ACTION, None)          # pre() ajoute action=None -> remplirait la file d'un None (stack casse)
+        # la file d'images du modele = OBS_IMAGES ("observation.images") : empiler les cameras dessus
+        b[OBS_IMAGES] = torch.stack([b[k] for k in self.policy.config.image_features], dim=-4)
+        self.policy._queues = populate_queues(self.policy._queues, b)
+        with torch.no_grad():
+            chunk = self.policy.predict_action_chunk(b)          # [1, H, A] NORMALISE
+        chunk_norm = chunk[0].detach().cpu().numpy()             # [H, A]
+        out = np.stack([self.post(chunk[:, k]).squeeze(0).cpu().numpy() for k in range(chunk.shape[1])])
+        return chunk_norm, out
+
+    def _build_target(self):
+        """Construit (cible normalisee [1,H,A], masque [H]) a partir du plan encore en cours.
+        index 0 = prochaine action a publier. gele les premieres --rtc-delay (engagees pendant
+        la latence), decroit lineairement sur --rtc-guide, puis libre."""
+        H, d, g = self.horizon, int(self.a.rtc_delay), int(self.a.rtc_guide)
+        if self._chunk_norm is None:
+            return None, None
+        p = self._pub_since_gen
+        rest = self._chunk_norm[p:]                              # ce qu'il reste du plan courant
+        if len(rest) == 0:
+            return None, None
+        A = self._chunk_norm.shape[1]
+        tgt = np.zeros((H, A), np.float32)
+        m = min(len(rest), H)
+        tgt[:m] = rest[:m]
+        w = np.zeros(H, np.float32)
+        for i in range(H):
+            if i >= m:            w[i] = 0.0                      # au-dela du plan connu : libre
+            elif i < d:           w[i] = 1.0                      # engage pendant la latence : gele
+            elif i < d + g:       w[i] = 1.0 - (i - d + 1) / (g + 1.0)   # fenetre de guidage decroissante
+            else:                 w[i] = 0.0                      # futur : libre
+        return torch.from_numpy(tgt).unsqueeze(0).to(self.dev), w
+
+    def _infer_loop_rtc(self):
+        """RTC : genere en continu des chunks pleine longueur qui se RECOUVRENT. Chaque
+        nouveau chunk est cousu au precedent par inpainting (prefixe gele) -> pas de pause
+        ET pas de saut arriere. Le plan est remplace a chaque cycle par la continuation."""
+        self.get_logger().warn(
+            f"mode RTC actif : gel={self.a.rtc_delay} actions, guide={self.a.rtc_guide}, "
+            f"horizon={self.horizon}.")
+        while self.run:
+            if not self.armed:
+                time.sleep(0.05); continue
+            try:
+                obs = self._get_obs()
+                if obs is None:
+                    time.sleep(0.05); continue
+                with self.lock:
+                    self._rtc_target, self._rtc_w = self._build_target()
+                t0 = time.perf_counter()
+                chunk_norm, out = self._rtc_full_chunk(obs)
+                self.inf_ms = (time.perf_counter() - t0) * 1000
+                self.inf_heavy_ms = self.inf_ms
+                # actions publiees pendant la generation = a jeter du debut du nouveau chunk
+                elapsed = int(round((self.inf_ms / 1000.0) * self.hz))
+                elapsed = max(0, min(elapsed, self.horizon - 1))
+                with self.lock:
+                    self.buf.clear()
+                    for a in out[elapsed:]:
+                        self.buf.append(a)
+                    self._chunk_norm = chunk_norm
+                    self._pub_since_gen = elapsed        # le prefixe [0:elapsed] est deja consomme
+                    self.last_pred = out[elapsed] if elapsed < len(out) else out[-1]
+                self.n_err = 0
+            except Exception as e:
+                self.n_err += 1; self.n_err_total += 1
+                self.get_logger().error(
+                    f"inference RTC EN ECHEC ({self.n_err}/{self.MAX_ERR}) : {type(e).__name__}: {e}")
+                if self.n_err >= self.MAX_ERR:
+                    self.armed = False
+                    with self.lock: self.buf.clear()
+                    self.get_logger().error(f"{self.MAX_ERR} echecs -> DESARMEMENT AUTOMATIQUE.")
+                time.sleep(0.1)
+
     def _publish_tick(self):
         if not self.armed:
             return
@@ -326,6 +548,8 @@ class InferCart(Node):
             a = self.buf.popleft() if self.buf else self.last_action
             if a is not None:
                 self.last_action = a
+            if fresh and self.a.rtc:
+                self._pub_since_gen += 1                # avance le pointeur d'alignement du plan
             q_cur = None if self.joints is None else self.joints.copy()
         if a is None or q_cur is None:
             return
@@ -343,18 +567,33 @@ class InferCart(Node):
         p_tgt = np.asarray(a[:3], float)
         R_tgt = rv_to_R(a[3:6])
 
+        # TRUCAGE ARTICULAIRE COHERENT : le modele raisonne dans le referentiel
+        # DE-TRUQUE. On y ramene donc la position courante (q_model) et on y fait TOUT
+        # le calcul (clamp du pas + DLS). Le trucage n'est reapplique QU'A LA FIN, sur
+        # la consigne joint_2 envoyee au robot -> la pince suit un arc d'epaule qui la
+        # tient j2_offset degres plus haut que la cible du modele (anti-raclage table).
+        off = np.radians(self.a.j2_offset)
+        q_model = j3_vers_modele(q_cur)      # meme espace que l'observation et le dataset
+        q_model[1] -= off
+
         # --- clamp du pas cartesien : borne l'a-coup au redemarrage apres une pause ---
-        p_cur = fkT(q_cur)[:3, 3]
+        p_cur = fkT(q_model)[:3, 3]
         d = p_tgt - p_cur
         n = float(np.linalg.norm(d))
         if n > self.a.max_dp:
             p_tgt = p_cur + d / n * self.a.max_dp
 
-        # --- IK amortie, seed = joints COURANTS (repart toujours du reel) ---
-        j = np.asarray(dls(q_cur, p_tgt, R_tgt, iters=25, w_ori=self.a.w_ori), float)
+        # --- IK amortie, seed = q_model (position de-truquee = celle que le modele voit) ---
+        j = np.asarray(dls(q_model, p_tgt, R_tgt, iters=25, w_ori=self.a.w_ori), float)
 
         fk_err = float(np.linalg.norm(fkT(j)[:3, 3] - p_tgt))
-        jump = float(np.max(np.abs(j - q_cur)))
+        jump = float(np.max(np.abs(j - q_model)))
+
+        # RE-TRUQUAGE : on ajoute l'offset a joint_2 sur la consigne finale. Le controle
+        # de butees ci-dessous porte sur la valeur REELLEMENT envoyee (post-trucage).
+        j[1] += off
+        # Retour vers l'espace ROBOT : le controleur attend une consigne compensee.
+        j = j3_vers_robot(j)
         self.last_fk_mm = fk_err * 1000
         if fk_err > FK_TOL or jump > JUMP_TOL:
             self.n_reject += 1
@@ -427,7 +666,7 @@ class InferCart(Node):
             q = None if self.joints is None else self.joints.copy()
         if a is None or q is None:
             return
-        cur = tcp_of(q)
+        cur = tcp_of(j3_vers_modele(q))      # meme espace que la demande du modele
         d = np.asarray(a[:3], float) - cur[:3]
         self.get_logger().info(
             f"TCP reel [{cur[0]:+.3f} {cur[1]:+.3f} {cur[2]:+.3f}] -> demande "
@@ -449,6 +688,14 @@ def main():
     ap.add_argument("--steps", type=int, default=10, help="pas de debruitage (10 = doc ; moins = plus rapide, moins bon)")
     ap.add_argument("--max-dp", type=float, default=0.05, help="deplacement TCP max par consigne (m)")
     ap.add_argument("--w-ori", type=float, default=1.0, help="poids orientation du DLS (0.5 = priorite position)")
+    ap.add_argument("--j2-offset", type=float, default=0.0, metavar="DEG",
+                    help="TRUCAGE ARTICULAIRE COHERENT : offset (deg) applique a joint_2 (epaule). "
+                         "L'observation est de-truquee via cinematique directe ET le DLS repart de "
+                         "cette position de-truquee -> tout le raisonnement du modele vit dans le "
+                         "meme referentiel (pas de derive). Le trucage n'existe qu'entre modele et "
+                         "robot : la pince suit un arc d'epaule qui la tient plus haut. "
+                         "Ex : -5 releve la pince pour ne pas racler la table (joint_2 negatif "
+                         "= pince plus haute, verifie par FK). 0 = aucun.")
     ap.add_argument("--sync", action="store_true",
                     help="mode SENSE-PLAN-ACT : infere 1 lot de 8 actions sur image FRAICHE, "
                          "les execute TOUTES, puis re-infere sur nouvelle image. Cree une pause "
@@ -461,6 +708,17 @@ def main():
                     help="indice de depart du slice d'actions dans le horizon. "
                          "-1 = defaut LeRobot (futur immediat). 8 = 8 dernieres sur 16 "
                          "(compensation de latence).")
+    ap.add_argument("--rtc", action="store_true",
+                    help="Real-Time Chunking : genere des chunks pleine longueur qui se "
+                         "recouvrent, chaque nouveau cousu au precedent par inpainting a masque "
+                         "doux (prefixe engage GELE). Supprime a la fois la pause (vs sync) ET le "
+                         "saut arriere aux frontieres (vs async). Incompatible avec --exec-offset.")
+    ap.add_argument("--rtc-delay", type=int, default=4, metavar="N",
+                    help="RTC : nb d'actions GELEES au debut du nouveau chunk (celles engagees "
+                         "pendant la latence). ~= inference_ms * hz / 1000. Defaut 4 (~250ms a 15Hz).")
+    ap.add_argument("--rtc-guide", type=int, default=4, metavar="N",
+                    help="RTC : largeur de la fenetre de guidage decroissante apres le prefixe gele "
+                         "(transition douce vers la generation libre). Defaut 4.")
     a = ap.parse_args()
     a.model = os.path.expanduser(a.model)
 

@@ -17,4 +17,4 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export CYCLONEDDS_URI="file://$HOME/cyclone_config.xml"
 export DISPLAY="${DISPLAY:-:0}"
 
-exec /usr/bin/python3 "$HOME/roby_gripper_monitor.py"
+exec /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/roby_gripper_monitor.py"

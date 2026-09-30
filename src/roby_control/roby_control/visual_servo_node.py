@@ -28,6 +28,8 @@ Services : /visual_servo/enable (std_srvs/SetBool) — démarre/arrête le suivi
            À l'activation : capture la pose cube de référence + le home TCP courant.
 """
 
+import os
+import sys
 import threading
 import numpy as np
 import rclpy
@@ -41,22 +43,44 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from moveit_msgs.srv import GetStateValidity
 from moveit_msgs.msg import RobotState
 
-# --- Cinématique du bras (URDF, tous rpy=0) — identique au prototype validé ---
-def Rx(q): c, s = np.cos(q), np.sin(q); return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
-def Ry(q): c, s = np.cos(q), np.sin(q); return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
-def Rz(q): c, s = np.cos(q), np.sin(q); return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+# --- Cinématique du bras : LUE DANS L'URDF (ADR-005, 2026-09-20) ---
+# Ce fichier portait une 3e copie manuelle de la chaîne (origines + TCP). Elle a divergé
+# de l'URDF de plus de 10 cm sans que rien ne le signale. Plus aucune constante
+# géométrique ici : tout vient de tools/pc/roby_cinematique.py, qui lit l'URDF.
+def _module_cinematique():
+    """Charge roby_cinematique depuis le dépôt. Lève si absent : pas de repli silencieux."""
+    candidats = []
+    ws = os.environ.get("ROBY_WS")
+    if ws:
+        candidats.append(os.path.join(ws, "tools", "pc"))
+    # Ce fichier : <ws>/src/roby_control/roby_control/ -> <ws>/tools/pc
+    ici = os.path.dirname(os.path.realpath(__file__))
+    candidats.append(os.path.normpath(os.path.join(ici, "..", "..", "..", "tools", "pc")))
+    candidats.append(os.path.expanduser("~/ros2_ws/tools/pc"))
+    candidats.append(os.path.expanduser("~"))          # tools/ est lié symboliquement dans le home
+    for c in candidats:
+        if os.path.isfile(os.path.join(c, "roby_cinematique.py")):
+            if c not in sys.path:
+                sys.path.insert(0, c)
+            import roby_cinematique
+            return roby_cinematique
+    raise ImportError(
+        "roby_cinematique introuvable (ADR-005 : la géométrie n'a qu'une source). "
+        "Cherché : " + ", ".join(candidats))
 
-JOINTS = [
-    (np.array([0, 0, 0.02]),            np.array([0, 0, 1.]), Rz),
-    (np.array([0.024031, 0, 0.202992]), np.array([0, 1, 0.]), Ry),
-    (np.array([-0.015224, 0, 0.441653]),np.array([0, 1, 0.]), Ry),
-    (np.array([0.119473, 0, 0.029716]), np.array([1, 0, 0.]), Rx),
-    (np.array([0.321516, 0, 0]),        np.array([0, 1, 0.]), Ry),
-]
-TCP_OFF = np.array([0.16, 0, 0])  # link_5 -> tcp (0.06 gripper + 0.10 tcp)
+
+cin = _module_cinematique()
+
+# Pointe d'outil du suivi visuel : 10 cm devant link_gripper. C'est un réglage de
+# COMMANDE (où l'on veut amener l'outil), pas une grandeur de l'URDF — il reste ici.
+TCP_OFF = np.array([0.10, 0, 0])
 JOINT_NAMES = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5']
-Q_LO = np.array([-3.14159, -1.0, -3.0, -3.14159, -1.6])
-Q_HI = np.array([3.14159, 1.2, 0.65, 3.14159, 1.6])
+# Butées de service de ce nœud, plus serrées que l'URDF sur joint_2 : on garde
+# l'INTERSECTION avec l'URDF, jamais l'élargissement.
+Q_LO = np.maximum([cin.LIMITS[n][0] for n in JOINT_NAMES],
+                  [-3.14159, -1.0, -3.0, -3.14159, -1.6])
+Q_HI = np.minimum([cin.LIMITS[n][1] for n in JOINT_NAMES],
+                  [3.14159, 1.2, 0.65, 3.14159, 1.6])
 
 
 def quat_to_R(x, y, z, w):
@@ -86,18 +110,9 @@ def rotvec_from_R(R):
 
 
 def fk_jac(q):
-    """Retourne (position TCP, rotation TCP 3x3, Jacobien géométrique 6x5)."""
-    R = np.eye(3); p = np.zeros(3); zs = []; ps = []
-    for i, (o, ax, rf) in enumerate(JOINTS):
-        p = p + R @ o
-        zs.append(R @ ax); ps.append(p.copy())
-        R = R @ rf(q[i])
-    p_tcp = p + R @ TCP_OFF
-    J = np.zeros((6, 5))
-    for i in range(5):
-        J[:3, i] = np.cross(zs[i], p_tcp - ps[i])
-        J[3:, i] = zs[i]
-    return p_tcp, R, J
+    """Retourne (position TCP, rotation TCP 3x3, Jacobienne 6x5) — chaîne lue dans l'URDF."""
+    T = cin.fkT(q)
+    return cin.fk_outil(q, TCP_OFF), T[:3, :3], cin.jac(q, offset=TCP_OFF)
 
 
 class VisualServoNode(Node):

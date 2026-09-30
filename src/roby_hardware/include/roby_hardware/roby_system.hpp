@@ -21,8 +21,6 @@
 #include "roby_hardware/stepper_driver.hpp"
 #include "roby_hardware/servo_driver.hpp"
 #include "roby_hardware/safety_monitor.hpp"
-#include "roby_hardware/encoder_driver.hpp"
-#include "roby_hardware/pid.hpp"
 
 namespace roby_hardware
 {
@@ -31,7 +29,11 @@ enum class JointType
 {
   STEPPER,
   SERVO,
-  MOCK
+  MOCK,
+  // Moteur BLDC pilote par une carte externe (axe 5 : B-G431B-ESC1 / SimpleFOC).
+  // Le plugin ne parle pas a la carte : il echange consigne/mesure par topics
+  // avec le noeud roby_wrist_bldc, seul maitre du port serie (cf ADR-004).
+  BLDC
 };
 
 struct JointInfo
@@ -43,9 +45,6 @@ struct JointInfo
   double command = 0.0;
   double prev_position = 0.0;
   double servo_offset_deg = 0.0;  // centre servo (0 rad joint = cet angle)
-  // Closed-loop encodeur (feedback) en complement du feedforward (command).
-  // Gains a 0 par defaut => correction nulle => open-loop. Voir pid.hpp / BUG-005.
-  PidState pid;
 };
 
 class RobySystem : public hardware_interface::SystemInterface
@@ -64,6 +63,14 @@ public:
 
   hardware_interface::CallbackReturn on_deactivate(
     const rclcpp_lifecycle::State & previous_state) override;
+
+  hardware_interface::CallbackReturn on_error(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  hardware_interface::CallbackReturn on_shutdown(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  ~RobySystem() override;
 
   std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
   std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
@@ -84,10 +91,6 @@ private:
   /// Apply coupling compensation for axes 2/3.
   double compensate_coupling(double joint3_cmd_rad, double joint2_pos_rad) const;
 
-  /// Callback de reglage PID live (topic /roby/pid_gains).
-  /// Message Float64MultiArray : [joint_number, kp, ki, kd, deadband].
-  void on_pid_gains(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
-
   /// Callbacks verrou tete (/head_lock) et pince (/gripper). Ils NE font QUE
   /// poser une cible atomique ; l'ecriture I2C est faite dans write() (thread
   /// RT), seul maitre du bus PCA9685 => pas de collision (cf. servo_driver.cpp).
@@ -95,6 +98,15 @@ private:
   void on_gripper(const std_msgs::msg::Bool::SharedPtr msg);
   // Reglage LIVE du serrage : angle brut en degres (topic /roby/gripper_deg).
   void on_gripper_deg(const std_msgs::msg::Float64::SharedPtr msg);
+
+  /// Axe BLDC : etat publie par le noeud roby_wrist_bldc [position, courant, flags].
+  void on_bldc_state(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
+  /// Thread 100 Hz qui publie la derniere consigne BLDC (hors thread RT).
+  void bldc_publish_loop();
+  // Arrete les fils de fond (publication BLDC, executeur des abonnements) ; idempotent.
+  void stop_background_threads();
+  /// Mesure BLDC exploitable (liaison OK + recale + fraiche) ? Remplit `pos`.
+  bool bldc_feedback(double & pos) const;
 
   std::vector<JointInfo> joints_;
   std::vector<std::unique_ptr<StepperDriver>> steppers_;
@@ -121,26 +133,11 @@ private:
 
   int cycles_since_command_ = 0;
 
-  // Watchdog deviation : nb de cycles consecutifs ou la deviation depasse le
-  // seuil critique. Desactivation seulement apres kCriticalDeviationDebounce
-  // cycles (debounce) => un glitch encodeur d un seul echantillon (burst EMI)
-  // est ignore (le compteur retombe a 0), un vrai runaway persiste et coupe.
-  int critical_deviation_streak_ = 0;
-  static constexpr int kCriticalDeviationDebounce = 8;
-
-  // Encoder feedback (option B : state_interface "position" = encoder reading)
-  // Active via param `encoder_enabled` (default false). Quand actif, la position
-  // publiee sur /joint_states refletera la vraie position physique mesuree, et
-  // non plus le compteur de steps open-loop.
-  bool encoder_enabled_ = false;
-  std::unique_ptr<EncoderDriver> encoder_;
-
-  // Reglage PID live (tuning) : noeud + thread d'execution dedie, ecoute
-  // /roby/pid_gains pour changer kp/ki/kd/deadband a chaud sans relancer.
-  rclcpp::Node::SharedPtr tuning_node_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr pid_sub_;
-  std::thread tuning_thread_;
-  std::atomic<bool> tuning_running_{false};
+  // Noeud + thread d'execution dedie aux topics hors thread RT : verrou tete,
+  // pince, reglage live du serrage et pont BLDC (mesure + consigne).
+  rclcpp::Node::SharedPtr topics_node_;
+  std::thread topics_thread_;
+  std::atomic<bool> topics_running_{false};
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr head_lock_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr gripper_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr gripper_deg_sub_;
@@ -164,23 +161,32 @@ private:
   double gripper_open_deg_ = 120.0;
   double gripper_closed_deg_ = 55.0;
 
-  // --- Partie B : recalage one-shot au settle (joint_2/3 open-loop) ---------
-  // A l'arret (consigne stable + axes immobiles), grosse mediane des lectures
-  // encodeur (robuste au bruit) -> recale le compteur de pas dessus -> le
-  // feedforward comble l'ecart, puis stop. Max kSettleMaxCorrections / mouvement.
-  void settle_recalibrate();
-  std::vector<double> prev_commands_;
-  std::vector<double> prev_step_pos_;
-  std::vector<std::vector<double>> settle_samples_;
-  int settle_counter_ = 0;
-  int settle_phase_ = 0;
-  int settle_correction_count_ = 0;
-  static constexpr int kSettleWaitCycles = 25;
-  static constexpr int kSettleCollectN = 60;
-  static constexpr double kSettleStepEps = 5e-5;
-  static constexpr double kSettleDeadbandRad = 0.0087;   // ~0.5 deg
-  static constexpr double kSettleMaxCorrRad = 0.35;      // ~20 deg : au-dela = aberrant
-  static constexpr int kSettleMaxCorrections = 2;
+  // --- Axe BLDC (joint_N_type = bldc) : pont par topics vers roby_wrist_bldc ---
+  // write() (thread RT) ne fait que poser la consigne dans un atomique ; un
+  // thread dedie la publie a 100 Hz. La mesure arrive par callback (thread des
+  // topics) dans des atomiques lus par read(). Aucun E/S serie ni DDS dans le
+  // thread RT. Un seul joint BLDC supporte.
+  int bldc_joint_ = -1;  // index dans joints_, -1 = aucun
+  std::string bldc_command_topic_ = "/roby/wrist_bldc/command";
+  std::string bldc_state_topic_ = "/roby/wrist_bldc/state";
+  double bldc_state_timeout_s_ = 0.2;
+  double bldc_wait_on_activate_s_ = 8.0;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr bldc_cmd_pub_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr bldc_state_sub_;
+  std::thread bldc_pub_thread_;
+  std::atomic<bool> bldc_pub_running_{false};
+  std::atomic<double> bldc_cmd_{0.0};
+  std::atomic<bool> bldc_cmd_valid_{false};
+  std::atomic<double> bldc_meas_pos_{0.0};
+  std::atomic<int> bldc_meas_flags_{0};
+  std::atomic<int64_t> bldc_meas_stamp_ns_{0};  // steady_clock
+  // Derniere consigne envoyee : reference "courante" du clamp de vitesse (comme
+  // le compteur de pas des steppers), pour ne pas boucler sur la mesure bruitee.
+  double bldc_last_cmd_ = 0.0;
+  bool bldc_feedback_ok_ = false;  // pour ne journaliser que les transitions
+  // Bits de flags publies par le noeud (cf roby_wrist_bldc/node.py).
+  static constexpr int kBldcLinkOk = 1;
+  static constexpr int kBldcHomed = 2;
 };
 
 }  // namespace roby_hardware

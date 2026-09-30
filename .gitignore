@@ -10,3 +10,8 @@ __pycache__/
 # desormais l'historique git les remplace.
 *.bak
 *.bak_*
+
+# IR OpenVINO du U-Net : gros binaire, regenere automatiquement par roby_ov.ensure_ir
+deployable_models/**/unet_ov.xml
+deployable_models/**/unet_ov.bin
+*.unet_ov.*

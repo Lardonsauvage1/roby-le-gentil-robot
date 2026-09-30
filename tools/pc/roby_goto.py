@@ -11,7 +11,7 @@ import argparse
 import os
 import sys
 
-sys.path.insert(0, os.path.expanduser("~"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 import numpy as np                       # noqa: E402
 import roby_oracle as o                  # noqa: E402
 

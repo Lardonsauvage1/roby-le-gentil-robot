@@ -1,4 +1,9 @@
 """
+⚠️ PÉRIMÉ PARTIELLEMENT (constaté le 2026-09-13) : `gripper_node`/`head_lock_node` refusent
+désormais de démarrer (RobySystem possède le PCA9685), `rviz_only` publie l'URDF MOCK (course au
+mock), les caméras et la scène de collision manquent. Le lancement fait foi dans `tools/pc/roby.py`
+(`roby up`), les contrôles dans `tools/pc/roby_gates.py`. À réaligner avant tout superviseur.
+
 Spec de la stack Roby — extraite des launch/scripts réels (2026-07-07).
 
 C'est la *source de vérité* du superviseur : chaque "service" décrit

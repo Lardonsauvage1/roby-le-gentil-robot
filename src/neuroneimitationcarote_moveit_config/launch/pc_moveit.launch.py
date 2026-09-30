@@ -17,6 +17,13 @@ Usage (PC) :
     export CYCLONEDDS_URI=file:///home/sam/cyclone_config.xml
     unset GTK_PATH
     ros2 launch neuroneimitationcarote_moveit_config pc_moveit.launch.py
+
+Axe 5 : wrist:=bldc (a passer AUSSI a robot_control.launch.py sur le Pi5) limite
+joint_5 a ce que le poignet BLDC suit reellement (0.5 rad/s). Defaut : servo.
+
+Scene de collision : chargee ICI, automatiquement (scene:=cuisine par defaut, scene:=aucune
+pour s'en passer). Elle vit dans move_group : chaque relance la perdait, et on l'a oubliee
+pendant toute une seance d'essais du modele (2026-09-13). rviz:=false pour les essais sans ecran.
 """
 
 from moveit_configs_utils import MoveItConfigsBuilder
@@ -25,9 +32,35 @@ from moveit_configs_utils.launches import (
     generate_moveit_rviz_launch,
 )
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument(
+                "wrist",
+                default_value="servo",
+                choices=["servo", "bldc"],
+                description="actionneur de l'axe 5 : servo (actuel) ou bldc (nouveau poignet)",
+            ),
+            DeclareLaunchArgument(
+                "scene",
+                default_value="cuisine",
+                description="scene roby_environments chargee au demarrage (aucune = pas de scene)",
+            ),
+            DeclareLaunchArgument("rviz", default_value="true", choices=["true", "false"]),
+            OpaqueFunction(function=_setup),
+        ]
+    )
+
+
+def _setup(context):
+    wrist = LaunchConfiguration("wrist").perform(context)
+    scene = LaunchConfiguration("scene").perform(context)
+    rviz = LaunchConfiguration("rviz").perform(context)
     moveit_config = MoveItConfigsBuilder(
         "neuroneimitationcarote",
         package_name="neuroneimitationcarote_moveit_config"
@@ -54,6 +87,16 @@ def generate_launch_description():
             "has_acceleration_limits": True,
             "max_acceleration": 2.0,
         }
+    if wrist == "bldc":
+        # Carte : 15 rad/s moteur = 1.67 rad/s bras (reducteur planetaire 9:1) ; le noeud
+        # wrist_bldc rampe a 0.5 rad/s / 1.5 rad/s2. Planifier plus vite ferait
+        # trainer l'axe derriere la trajectoire.
+        limits["joint_5"] = {
+            "has_velocity_limits": True,
+            "max_velocity": 0.5,
+            "has_acceleration_limits": True,
+            "max_acceleration": 1.5,
+        }
 
     # Open-loop : on désactive le contrôle de tolérance start-state (steppers sans
     # encodeur actif) — sinon ABORT "start point deviates" après replanification.
@@ -68,10 +111,22 @@ def generate_launch_description():
         ld.add_action(action)
 
     # RViz avec le plugin MoveIt (visualisation + cible interactive)
-    for action in generate_moveit_rviz_launch(moveit_config).entities:
-        ld.add_action(action)
+    if rviz == "true":
+        for action in generate_moveit_rviz_launch(moveit_config).entities:
+            ld.add_action(action)
+
+    # Scene de collision : le chargeur attend move_group, charge, et s'arrete.
+    if scene != "aucune":
+        ld.add_action(
+            Node(
+                package="roby_environments",
+                executable="scene_loader",
+                arguments=["--env", scene, "--attente", "90"],
+                output="both",
+            )
+        )
 
     # PAS de robot_state_publisher (le Pi5 est l'unique publisher /robot_description).
     # PAS de static_tf world→base_link (fourni par le Pi5).
 
-    return ld
+    return [ld]

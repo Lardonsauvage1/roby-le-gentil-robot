@@ -33,7 +33,7 @@ int main()
   std::signal(SIGINT, signal_handler);
 
   printf("=== StepperDriver Hardware Test — Motor 1 ===\n");
-  printf("  GPIO chip: /dev/gpiochip0\n");
+  printf("  GPIO chip: /dev/gpiochip4\n");
   printf("  STEP pin:  17\n");
   printf("  DIR pin:   27\n");
   printf("  Gear:      16/85 (belt)\n");
@@ -59,7 +59,7 @@ int main()
   printf("[1/6] Initializing StepperDriver...\n");
   if (!driver.init(cfg)) {
     printf("[ERROR] Failed to initialize StepperDriver.\n");
-    printf("  Check: GPIO permissions, gpiochip0 exists, pins not in use.\n");
+    printf("  Check: GPIO permissions, gpiochip4 exists, pins not in use.\n");
     return 1;
   }
   printf("  [OK] StepperDriver initialized\n");

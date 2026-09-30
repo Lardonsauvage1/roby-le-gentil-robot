@@ -4,13 +4,14 @@ Use this on the PC when move_group and ros2_control both run on the Pi5.
 RViz subscribes to /joint_states and /tf via DDS to display the robot state.
 
 Usage (PC):
-    export CYCLONEDDS_URI='<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="enp87s0"/></Interfaces><AllowMulticast>true</AllowMulticast></General><Discovery><Peers><Peer address="192.168.1.37"/></Peers></Discovery></Domain></CycloneDDS>'
+    export CYCLONEDDS_URI=file:///home/sam/cyclone_config.xml   # pair Pi5 : deploy/pc/
     export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
     export ROS_DOMAIN_ID=42
     unset GTK_PATH
     ros2 launch neuroneimitationcarote_moveit_config rviz_only.launch.py
 """
 
+import os
 from moveit_configs_utils import MoveItConfigsBuilder
 from moveit_configs_utils.launches import (
     generate_moveit_rviz_launch,
@@ -21,6 +22,13 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    # Refus du domaine 42 (2026-09-13, spec-point-entree-unique-lancement) : ce lancement
+    # publie l'URDF MOCK du moveit_config ; a cote du vrai bras, c'est la course au mock (steppers morts, BUG-008).
+    if os.environ.get("ROS_DOMAIN_ID") == "42":
+        raise RuntimeError(
+            "rviz_only.launch.py refuse sur le domaine 42 (vrai robot) : il publie l'URDF MOCK du moveit_config. "
+            "Vrai robot : `roby up --nid-confirme` ; simulation : `roby up --sim`."
+        )
     moveit_config = MoveItConfigsBuilder(
         "neuroneimitationcarote",
         package_name="neuroneimitationcarote_moveit_config"

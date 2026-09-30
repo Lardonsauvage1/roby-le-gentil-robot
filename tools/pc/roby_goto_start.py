@@ -10,11 +10,12 @@ meme canal eprouve que roby_sortie_nid.sh). Duree calculee pour ne pas depasser 
   roby_goto_start.py --median <batch>  # cible = depart MEDIAN du batch (le plus typique)
 """
 import argparse, glob, os, sys, time
-sys.path.insert(0, os.path.expanduser("~"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 import numpy as np
 from roby_oracle import fkT, LIMITS
 
 import rclpy
+import roby_gates
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from builtin_interfaces.msg import Duration
@@ -75,6 +76,7 @@ def main():
 
     rclpy.init()
     node = Node("roby_goto_start")
+    roby_gates.exiger(node, "roby_goto_start")  # lecture seule ; quitte si la stack est incoherente
     cur = {}
 
     def _js(m):

@@ -2,7 +2,7 @@
 """Pilote le servo de verrouillage sur le canal 2 du PCA9685 (0x40, i2c-1).
 Reproduit EXACTEMENT la logique de ServoDriver (50Hz, pulse=500+angle/180*2000us).
 Usage: python3 lock_servo.py <angle_deg>
-Clamp de securite: [0, 45] deg (verrou attendu ~10 deg). Channel modifiable en tete.
+Clamp de securite: [-40, 95] deg. Valeurs calibrees : 50 = verrouille, 75 = deverrouille (head_lock_node.py).
 """
 import fcntl, os, sys, time
 
@@ -10,7 +10,7 @@ I2C_SLAVE = 0x0703
 ADDR = 0x40
 BUS  = "/dev/i2c-1"
 CH   = 2                  # canal du servo de verrouillage
-SAFE_MIN, SAFE_MAX = -40.0, 95.0   # deverrouille=50deg, recherche verrou plus haut
+SAFE_MIN, SAFE_MAX = -40.0, 95.0   # 50=verrouille 75=deverrouille (head_lock_node.py)
 
 def _refuse_si_stack_active():
     """Anti-contention PCA9685 : si la stack RT (ros2_control) tourne, elle

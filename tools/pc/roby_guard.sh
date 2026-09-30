@@ -3,21 +3,12 @@
 # Le garde filtre les consignes reseau -> moteurs (butees + vitesse + plancher + collision MoveIt).
 # Il NE bouge rien tout seul : il attend des consignes sur /guard/joint_trajectory (+ /guard/gripper).
 #
-# Prerequis pour l'anti-collision reelle : move_group lance ET la scene chargee :
-#     ros2 run roby_environments scene_loader --env atelier_actuel
+# Prerequis pour l'anti-collision reelle : move_group lance ET la scene chargee — c'est le cas
+# apres `roby up` (pc_moveit.launch.py la charge) ; le garde refuse de demarrer sinon.
 #
 # Options passees en plus (ex : --max-vel 1.0 --no-floor). Voir roby_guard.py --help.
 # Ctrl-C pour arreter.
 set -e
-
-# Neutralise pyenv (rclpy = python systeme 3.12)
-unset PYENV_VERSION 2>/dev/null || true
-export PATH="$(echo "$PATH" | tr ':' '\n' | grep -v '\.pyenv' | grep -v '/venv/' | paste -sd ':')"
-
-source /opt/ros/jazzy/setup.bash
-[ -f "$HOME/ros2_ws/install/setup.bash" ] && source "$HOME/ros2_ws/install/setup.bash"
-export ROS_DOMAIN_ID=42
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-export CYCLONEDDS_URI="file://$HOME/cyclone_config.xml"
-
-exec /usr/bin/python3 "$HOME/roby_guard.py" "$@"
+ici="$(dirname "$(readlink -f "$0")")"
+source "$ici/roby_ros_env.sh"   # domaine 42 (43 si ROBY_SIM=1), paquets de CE workspace
+exec /usr/bin/python3 "$ici/roby_guard.py" "$@"

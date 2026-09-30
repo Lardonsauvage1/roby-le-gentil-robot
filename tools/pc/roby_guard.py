@@ -47,6 +47,7 @@ Etat en direct    : ros2 topic echo /guard/status
 import argparse
 import os
 import sys
+import threading
 import time
 
 import numpy as np
@@ -65,11 +66,32 @@ from control_msgs.action import FollowJointTrajectory
 from moveit_msgs.srv import GetStateValidity
 
 # --- cinematique + butees : une seule source de verite = roby_oracle.py ---
-sys.path.insert(0, os.path.expanduser("~"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 import roby_oracle as O            # noqa: E402  (fkT, fk_pos, LIMITS, J, _z_pick, D_XYZ...)
+import roby_gates                  # noqa: E402
 
 J = O.J                            # ["joint_1"..."joint_5"]
 NEPS = 1e-6
+
+
+
+# --- Espace MODELE vs espace ROBOT (2026-09-07) -------------------------------
+# Les consignes qui traversent le garde sont COMPENSEES (joint_3 ne parcourt que
+# J3_SCALE de la course demandee, cf. NOTES_echelle_joint3.md). Les verifications
+# geometriques -- plancher par FK et anti-collision MoveIt -- doivent donc porter sur
+# la position REELLE du bras, pas sur la consigne. Sans cette conversion, le garde
+# croyait la pince ~3 cm PLUS HAUTE qu'elle n'est : il aurait laisse passer une
+# descente sous la table, soit exactement l'epaisseur de sa marge plancher.
+J3_SCALE = float(os.environ.get("ROBY_J3_SCALE", "0") or 0)
+J3_REF = float(os.environ.get("ROBY_J3_REF", "0.5237"))
+
+
+def _modele(q):
+    """Consigne compensee -> position reelle (espace modele). Identite si desactive."""
+    q = list(q)
+    if J3_SCALE > 0 and len(q) > 2:
+        q[2] = J3_REF + J3_SCALE * (q[2] - J3_REF)
+    return q
 
 
 class Guard(Node):
@@ -83,6 +105,12 @@ class Guard(Node):
         self.last_q = None         # derniere consigne TRANSMISE (pour la vitesse en streaming)
         self.last_t = None         # instant (monotonic) de cette derniere consigne
         self.frozen = False        # gele apres une violation ?
+        # Les trajectoires sont traitees UNE PAR UNE. Le groupe reentrant (necessaire pour
+        # attendre MoveIt dans le callback) laissait deux callbacks se chevaucher des que
+        # MoveIt depassait ~66 ms : l'un pouvait publier APRES que l'autre ait gele et
+        # envoye le maintien -- le maintien etait alors ecrase -- ou publier une cible
+        # plus ancienne apres une plus recente (revue du 2026-09-13).
+        self._verrou_traj = threading.Lock()
         self.reason = ""           # pourquoi
         self.n_pass = 0            # consignes transmises
         self.n_clamp = 0           # points clampes (vitesse/pas/butee limites)
@@ -157,14 +185,20 @@ class Guard(Node):
     def _check_floor(self, q):
         if self.a.no_floor:
             return True, ""
-        tcp = O.fk_pos(list(q))
+        tcp = O.fk_pos(_modele(q))
         floor = O._z_pick(float(tcp[0]), float(tcp[1])) - self.a.floor_margin
         if float(tcp[2]) < floor:
             return False, f"plancher : pince z={tcp[2]:.3f} < table {floor:.3f}"
         return True, ""
 
     def _check_collision(self, q):
-        """MoveIt : la config q est-elle en collision (table/socle/soi) ? Fail-safe."""
+        """MoveIt : la config q est-elle en collision (table/socle/soi) ? Fail-safe.
+
+        ⚠️ q arrive COMPENSE (consigne robot). MoveIt raisonne dans l'espace du modele
+        URDF -> on de-compense avant de l'interroger, sinon la verification porte sur une
+        configuration qui n'est pas celle du bras.
+        """
+        q = _modele(q)
         if self.a.no_moveit:
             return True, ""
         if not self.moveit.service_is_ready():
@@ -216,6 +250,10 @@ class Guard(Node):
         return qc, clamped
 
     def _on_nn_traj(self, msg):
+        with self._verrou_traj:
+            self._traiter_traj(msg)
+
+    def _traiter_traj(self, msg):
         if self.frozen:
             return                                        # gele (collision) : on ignore jusqu'au reset
         if self.cur is None:
@@ -273,10 +311,11 @@ class Guard(Node):
         self.pub_tr.publish(t)
 
     def _on_reset(self, req, resp):
-        self.frozen = False
-        self.reason = ""
-        self.last_q = None
-        self.last_t = None
+        with self._verrou_traj:          # jamais au milieu du traitement d'une trajectoire
+            self.frozen = False
+            self.reason = ""
+            self.last_q = None
+            self.last_t = None
         self.get_logger().warn("RESET : le garde reprend (verifie la scene avant de relancer le reseau).")
         resp.success = True
         resp.message = "garde reactive"
@@ -358,6 +397,12 @@ def main():
     a = ap.parse_args()
 
     rclpy.init()
+    # Porte (roby_gates) : le garde est le dernier filtre avant les moteurs. Sans scene, son
+    # anti-collision ne connait ni la table ni la cuisine (seance du 2026-09-13 : scene VIDE et
+    # pourtant « moveit=OUI ») ; il refuse donc de demarrer, sauf --no-moveit assume.
+    porte = rclpy.create_node("roby_guard_porte")
+    roby_gates.exiger(porte, "roby_guard", scene=not a.no_moveit)
+    porte.destroy_node()
     node = Guard(a)
     ex = MultiThreadedExecutor()
     ex.add_node(node)

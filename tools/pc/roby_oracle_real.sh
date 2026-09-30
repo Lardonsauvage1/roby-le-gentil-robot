@@ -6,15 +6,10 @@
 #   ~/roby_oracle_real.sh --episodes 3                 # 3 episodes
 # LE ROBOT BOUGE — surveiller, doigt sur la coupure moteurs. Ctrl-C pour arreter le script.
 set -e
+ici="$(dirname "$(readlink -f "$0")")"
+source "$ici/roby_ros_env.sh"   # domaine 42, paquets de CE workspace
 
-# Neutralise pyenv (rclpy = python systeme 3.12)
-unset PYENV_VERSION 2>/dev/null || true
-export PATH="$(echo "$PATH" | tr ':' '\n' | grep -v '\.pyenv' | paste -sd ':')"
-
-source /opt/ros/jazzy/setup.bash
-[ -f "$HOME/ros2_ws/install/setup.bash" ] && source "$HOME/ros2_ws/install/setup.bash"
-export ROS_DOMAIN_ID=42
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-export CYCLONEDDS_URI="file://$HOME/cyclone_config.xml"
-
-exec /usr/bin/python3 "$HOME/roby_oracle.py" --mode real --go --episodes 1 "$@"
+# tee vers un log (diagnostic) SANS priver le panneau de la sortie (il lit stdout).
+# PYTHONUNBUFFERED : sinon les prints sont bufferises et le log/panneau restent vides.
+export PYTHONUNBUFFERED=1
+/usr/bin/python3 "$ici/roby_oracle.py" --mode real --go --episodes 1 "$@" 2>&1 | tee "$HOME/roby_oracle_last.log"

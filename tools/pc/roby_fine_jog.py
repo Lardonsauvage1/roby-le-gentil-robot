@@ -32,6 +32,8 @@ from builtin_interfaces.msg import Duration
 
 import tf2_ros
 
+import roby_gates
+
 JOINTS = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
 LIMITS = {                       # butees position (rad), depuis l'URDF
     "joint_1": (-3.14159, 3.14159),
@@ -278,6 +280,11 @@ class FineJog(Node):
 
 def main():
     rclpy.init()
+    # Porte (roby_gates) AVANT la fenetre : le jog recopie /joint_states comme point de depart de
+    # chaque mouvement — un fantome sur ce topic et c'est un saut (BUG-008, 38 deg sur l'axe 1).
+    porte = rclpy.create_node("roby_fine_jog_porte")
+    roby_gates.exiger(porte, "roby_fine_jog")
+    porte.destroy_node()
     root = tk.Tk()
     node = FineJog(root)
 

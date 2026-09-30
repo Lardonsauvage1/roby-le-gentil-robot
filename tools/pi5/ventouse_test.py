@@ -1,105 +1,137 @@
 #!/usr/bin/env python3
-"""Testeur VENTOUSE : pilote un canal du PCA9685 (0x40, i2c-1).
-Sert a trouver a quelle IMPULSION la pompe/vanne du kit commute, et a identifier
-lequel des 2 cables fait quoi.
+"""Banc prehenseur VENTOUSE : pilotage d une entree PWM via le PCA9685.
 
-Usage:
-  python3 ventouse_test.py <ch> on|off        # 100deg (1611us) / 0deg (500us)
-  python3 ventouse_test.py <ch> us <microsec> # impulsion BRUTE (ex: 1500)
-  python3 ventouse_test.py <ch> sweep         # balaye 600..2500us, 1.5s/pas
-  python3 ventouse_test.py alloff             # CH3 et CH4 -> off (500us)
+Meme methode que lock_test.py (dont la garde anti-contention est reprise telle quelle) :
+100% standalone, a lancer stack COUPEE, sinon 2 maitres sur le bus I2C.
 
-⚠️ pompe alimentee par le rail V+ partage : teste COURT, surveille verrou/pince.
-Garde-fou : refuse si la stack RT (ros2_control) tourne. STACK COUPEE requise.
+Convention doc du module : 100 deg = ACTIVE, 0 deg = COUPE.
+A 50 Hz : pulse = 500 + (deg/180)*2000 us  ->  0 deg = 500 us, 100 deg = 1611 us.
+
+Usage :
+  ventouse_test.py --ch 7 --deg 100 --duree 5      # active 5 s puis coupe
+  ventouse_test.py --ch 7 --deg 0                  # coupe et sort
+  ventouse_test.py --ch 7 --lecture                # lit l etat sans rien changer
 """
-import fcntl, os, sys, time
+import argparse
+import fcntl
+import os
+import subprocess
+import sys
+import time
 
-I2C_SLAVE = 0x0703
 ADDR, BUS = 0x40, "/dev/i2c-1"
-VENTOUSE_CHANNELS = (3, 4)
-SWEEP_US = [600, 900, 1100, 1300, 1500, 1700, 1900, 2100, 2300, 2500]
 
 
-def _refuse_si_stack_active():
-    import subprocess
+def refuse_si_stack_active():
+    """Anti-contention PCA9685 : si la stack RT tourne, elle possede deja le bus."""
     if subprocess.run(["pgrep", "-f", "ros2_control_node"],
                       stdout=subprocess.DEVNULL).returncode == 0:
-        sys.stderr.write("REFUS: la stack RT (ros2_control) possede deja le PCA9685.\n"
-                         "  -> coupe la stack RT d'abord (evite la contention I2C).\n")
+        sys.stderr.write(
+            "REFUS: la stack RT (ros2_control) possede deja le PCA9685.\n"
+            "  -> couper la stack RT d abord (sinon 2 maitres I2C = servos qui deconnent).\n")
         raise SystemExit(1)
 
 
-def us_to_off(us):
-    return int((us / 20000.0) * 4096.0)
-
-
-def open_bus():
-    fd = os.open(BUS, os.O_RDWR); fcntl.ioctl(fd, I2C_SLAVE, ADDR)
-    os.write(fd, bytes([0xFE])); pres = os.read(fd, 1)[0]
-    if pres != 121:
-        for r, v in ((0x00, 0x10), (0xFE, 121), (0x00, 0x20)):
-            os.write(fd, bytes([r, v]))
-        time.sleep(0.001); os.write(fd, bytes([0x00, 0xA0]))
-        print("PCA init 50Hz (etait %d)" % pres)
-    return fd
-
-
-def set_us(fd, ch, us):
-    off = us_to_off(us); base = 0x06 + 4 * ch
-    os.write(fd, bytes([base, 0, 0, off & 0xFF, (off >> 8) & 0x0F]))
-    print("  CH%d -> pulse %4.0f us (off_tick %d)" % (ch, us, off))
-
-
-def set_duty(fd, ch, pct):
-    """Rapport cyclique 0..100 % (pas un signal servo). 100 = full ON, 0 = full OFF."""
-    pct = max(0.0, min(100.0, pct)); base = 0x06 + 4 * ch
-    if pct >= 100.0:
-        os.write(fd, bytes([base, 0x00, 0x10, 0x00, 0x00]))   # bit full-ON
-        print("  CH%d -> duty 100%% (full ON)" % ch)
-    elif pct <= 0.0:
-        os.write(fd, bytes([base, 0x00, 0x00, 0x00, 0x10]))   # bit full-OFF
-        print("  CH%d -> duty 0%% (full OFF)" % ch)
-    else:
-        off = int(pct / 100.0 * 4095)
-        os.write(fd, bytes([base, 0x00, 0x00, off & 0xFF, (off >> 8) & 0x0F]))
-        print("  CH%d -> duty %.0f%% (off_tick %d)" % (ch, pct, off))
-
-
 def main():
-    args = sys.argv[1:]
-    _refuse_si_stack_active()
+    p = argparse.ArgumentParser()
+    p.add_argument("--ch", type=int, default=7, help="canal PCA9685 (0-15)")
+    p.add_argument("--deg", type=float, default=None, help="100 = active, 0 = coupe")
+    p.add_argument("--duree", type=float, default=0.0,
+                   help="secondes d activation avant coupure auto (0 = laisse en l etat)")
+    p.add_argument("--lecture", action="store_true", help="lit l etat, n ecrit rien")
+    p.add_argument("--alterne", type=int, default=0,
+                   help="nb de cycles haut/bas (0 = pas d alternance)")
+    p.add_argument("--t-haut", type=float, default=1.0, help="secondes a l etat actif")
+    p.add_argument("--t-bas", type=float, default=1.0, help="secondes a l etat coupe")
+    p.add_argument("--no-reset", action="store_true",
+                   help="ne pas reinitialiser le PCA (utile si d autres servos sont alimentes)")
+    a = p.parse_args()
 
-    if args == ["alloff"]:
-        fd = open_bus()
-        for ch in VENTOUSE_CHANNELS:
-            set_us(fd, ch, 500)
-        os.close(fd); return 0
+    if a.ch in (0, 1, 2, 3):
+        sys.stderr.write(f"REFUS: CH{a.ch} est deja utilise "
+                         "(0=axe4, 1=axe5, 2=verrou tete, 3=pince).\n")
+        raise SystemExit(1)
 
-    if len(args) < 2:
-        print(__doc__); return 1
-    ch = int(args[0]); mode = args[1]
-    fd = open_bus()
+    refuse_si_stack_active()
+    fd = os.open(BUS, os.O_RDWR)
+    fcntl.ioctl(fd, 0x0703, ADDR)
 
-    if mode == "on":
-        set_us(fd, ch, 1611)
-    elif mode == "off":
-        set_us(fd, ch, 500)
-    elif mode == "us" and len(args) == 3:
-        set_us(fd, ch, float(args[2]))
-    elif mode == "duty" and len(args) == 3:
-        set_duty(fd, ch, float(args[2]))
-    elif mode == "sweep":
-        print("SWEEP CH%d (repere a quelle valeur la pompe demarre) :" % ch)
-        for us in SWEEP_US:
-            set_us(fd, ch, us)
-            time.sleep(1.5)
-        set_us(fd, ch, 500)   # remet off a la fin
-        print("  -> remis a 500us (off)")
-    else:
-        os.close(fd); print(__doc__); return 1
+    def reg(r, v):
+        os.write(fd, bytes([r, v]))
+
+    def rd(r):
+        os.write(fd, bytes([r]))
+        return os.read(fd, 1)[0]
+
+    def lire_ch(ch):
+        b = 0x06 + 4 * ch
+        off = rd(b + 2) | (rd(b + 3) << 8)
+        return off, off / 4096.0 * 20000.0
+
+    def set_deg(ch, deg):
+        pulse = 500.0 + (deg / 180.0) * 2000.0
+        off = int((pulse / 20000.0) * 4096.0)
+        b = 0x06 + 4 * ch
+        os.write(fd, bytes([b, 0, 0, off & 0xFF, (off >> 8) & 0x0F]))
+        back = rd(b + 2) | (rd(b + 3) << 8)
+        etat = "OK" if back == off else "!! MISMATCH"
+        print(f"  CH{ch} -> {deg:5.1f} deg | pulse {pulse:4.0f} us | "
+              f"off ecrit {off}, relu {back} {etat}", flush=True)
+        return back == off
+
+    if not a.no_reset:
+        print(">>> reset PCA9685 (prescale 121 = 50 Hz)")
+        reg(0x00, 0x10)
+        reg(0xFE, 121)
+        reg(0x00, 0x20)
+        time.sleep(0.001)
+        reg(0x00, 0xA0)
+        time.sleep(0.1)
+    print(f"    MODE1=0x{rd(0x00):02X} PRESCALE={rd(0xFE)} (121 attendu)")
+
+    off, us = lire_ch(a.ch)
+    print(f">>> etat initial CH{a.ch} : off={off} soit ~{us:.0f} us")
+    if a.lecture or a.deg is None:
+        os.close(fd)
+        return
+
+    # on part TOUJOURS d un etat coupe et connu
+    print(">>> mise a l etat COUPE avant tout")
+    set_deg(a.ch, 0.0)
+    time.sleep(0.3)
+
+    if a.alterne > 0:
+        haut = a.deg if a.deg is not None else 100.0
+        print(f">>> ALTERNANCE {a.alterne} cycles : {haut:.0f} deg pendant {a.t_haut:.1f} s, "
+              f"puis 0 deg pendant {a.t_bas:.1f} s")
+        try:
+            for i in range(a.alterne):
+                print(f"--- cycle {i+1}/{a.alterne} : HAUT")
+                set_deg(a.ch, haut)
+                time.sleep(a.t_haut)
+                print(f"--- cycle {i+1}/{a.alterne} : BAS")
+                set_deg(a.ch, 0.0)
+                time.sleep(a.t_bas)
+        except KeyboardInterrupt:
+            print("\n>>> interrompu -> coupure de securite")
+        finally:
+            set_deg(a.ch, 0.0)  # on ne laisse JAMAIS la sortie active en sortant
+        os.close(fd)
+        print("termine (sortie coupee).")
+        return
+
+    print(f">>> ACTIVATION a {a.deg:.0f} deg")
+    set_deg(a.ch, a.deg)
+
+    if a.duree > 0:
+        print(f"    maintien {a.duree:.1f} s ...", flush=True)
+        time.sleep(a.duree)
+        print(">>> COUPURE")
+        set_deg(a.ch, 0.0)
 
     os.close(fd)
-    return 0
+    print("termine.")
 
 
-sys.exit(main())
+if __name__ == "__main__":
+    main()

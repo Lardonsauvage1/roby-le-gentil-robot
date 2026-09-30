@@ -26,6 +26,9 @@ setup(
         'console_scripts': [
             'aruco_node = roby_control.aruco_node:main',
             'visual_servo_node = roby_control.visual_servo_node:main',
+            'leader_node = roby_control.leader_node:main',
+            'leader_calib_live = roby_control.leader_calib_live:main',
+            'leader_teleop_sim = roby_control.leader_teleop_sim:main',
         ],
     },
 )

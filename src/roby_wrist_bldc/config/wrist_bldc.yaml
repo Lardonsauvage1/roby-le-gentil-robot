@@ -1,0 +1,30 @@
+# Parametres du noeud wrist_bldc (axe 5, poignet BLDC).
+# nest_position n'est PAS ici : wrist_bldc.launch.py le lit dans
+# roby_hardware/config/initial_positions.yaml (joint_5) = reference du nid
+# commune a toute la stack.
+/**:
+  ros__parameters:
+    # "auto" : /dev/roby_wrist (regle udev) sinon unique ST-LINK (VID 0483).
+    port: auto
+    baudrate: 115200
+    simulate: false
+
+    # Recalage Z<nid> au lancement : la tete DOIT etre au nid (procedure habituelle).
+    recalibrate_on_start: true
+    enable_on_start: true
+    startup_homing_timeout_s: 15.0
+
+    # Butees = URDF joint_5. A reprendre si le debattement mecanique du
+    # nouveau poignet differe (mesure au montage, essai T5 du banc).
+    position_min: -1.6
+    position_max: 1.6
+
+    # Carte : velocity_limit 15 rad/s moteur = 0.75 rad/s bras. Garder une marge.
+    max_velocity: 0.5
+    max_acceleration: 1.5
+
+    require_homing: true
+    tracking_error_limit: 0.35
+    tracking_error_time_s: 0.5
+    # Plus de consigne de ros2_control depuis ce delai => arret sur rampe.
+    command_timeout_s: 0.5

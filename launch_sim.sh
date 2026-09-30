@@ -1,25 +1,11 @@
 #!/bin/bash
-# Lance la simulation MoveIt du bras neuroneimitationcarote
-# Utilise CycloneDDS en mode local (pas besoin du réseau multi-machines)
-
-# Config CycloneDDS locale (autodetermine l'interface réseau)
-export CYCLONEDDS_URI="<CycloneDDS><Domain><General><Interfaces><NetworkInterface autodetermine=\"true\"/></Interfaces></General></Domain></CycloneDDS>"
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-
-# Nettoyer GTK_PATH snap qui casse rviz2
-unset GTK_PATH
-
-source /opt/ros/jazzy/setup.bash
-source /home/sam/ros2_ws/install/setup.bash
-export ROS_DOMAIN_ID=42
-
-echo "=== Lancement simulation neuroneimitationcarote ==="
-echo "  RMW: CycloneDDS (local)"
-echo "  Domain ID: $ROS_DOMAIN_ID"
-echo ""
-echo "  Utilisation dans RViz:"
-echo "    - Déplacer les marqueurs orange pour choisir la pose cible"
-echo "    - Panneau MotionPlanning > Planning > Plan & Execute"
-echo ""
-
-ros2 launch neuroneimitationcarote_moveit_config demo.launch.py
+# PERIME (2026-09-13) — renvoie a `roby up --sim`.
+#
+# Ce script lancait la demo MoveIt (demo.launch.py) : robot simule sans scene de collision,
+# sans le launch du vrai robot, et jusqu'au 2026-09-13 sur le domaine 42 du vrai bras.
+# La simulation passe maintenant par le MEME chemin que le vrai robot (robot_control.launch.py
+# use_mock:=true + pc_moveit.launch.py + scene cuisine), sur le domaine 43 :
+#
+#     tools/pc/roby up --sim        puis  roby sortie --sim --go, roby jog --sim, roby down --sim
+echo "launch_sim.sh est perime : lancement de \`roby up --sim\` (meme chaine que le vrai robot, domaine 43)." >&2
+exec "$(dirname "$(readlink -f "$0")")/tools/pc/roby" up --sim "$@"

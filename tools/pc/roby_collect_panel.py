@@ -25,9 +25,16 @@ from tkinter import ttk
 HOME = os.path.expanduser("~")
 DATASETS = os.path.join(HOME, "roby_datasets")
 STAGING = os.path.join(DATASETS, ".staging")
-ORACLE_SH = os.path.join(HOME, "roby_oracle_real.sh")
-VIDEO_SRV = os.path.join(HOME, "bag_video_server.py")
+# Code : le voisin de CE fichier (meme copie du depot), jamais celui du home. Donnees : le home.
+ICI = os.path.dirname(os.path.realpath(__file__))
+ORACLE_SH = os.path.join(ICI, "roby_oracle_real.sh")
+VIDEO_SRV = os.path.join(ICI, "bag_video_server.py")
 VIDEO_PORT = 8091
+
+# Scenario RATTRAPAGE (ROBY_RECOVERY=1) : le panneau lance l'oracle avec --recovery et
+# consolide dans un batch_recovery_* SEPARE (pas de melange avec la collecte normale).
+RECOVERY = os.environ.get("ROBY_RECOVERY", "").strip() == "1"
+SESSION_PREFIX = "batch_recovery" if RECOVERY else "batch_collect"
 
 
 class Panel:
@@ -58,7 +65,12 @@ class Panel:
         if forced:
             self.session_dir = os.path.expanduser(forced)
         elif resume:
-            cands = sorted(glob.glob(os.path.join(DATASETS, "batch_collect_*")),
+            # ⚠️ Exclure les dossiers DERIVES (_cart, SAUVEGARDE_...) : ils matchent le
+            # motif de session et sont PLUS RECENTS que la session dont ils sortent, donc
+            # la reprise atterrissait dedans. Vecu le 2026-09-07 : le panneau a repris
+            # batch_recovery_far_20260722_183001_cart, un produit de conversion.
+            cands = sorted([d for d in glob.glob(os.path.join(DATASETS, f"{SESSION_PREFIX}_*"))
+                            if os.path.isdir(d) and not d.endswith("_cart")],
                            key=os.path.getmtime)
             if cands:
                 self.session_dir = cands[-1]
@@ -71,7 +83,7 @@ class Panel:
 
     def _new_session_dir(self):
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.session_dir = os.path.join(DATASETS, f"batch_collect_{ts}")
+        self.session_dir = os.path.join(DATASETS, f"{SESSION_PREFIX}_{ts}")
 
     def _scan_session(self):
         """kept = nb d'ep presents ; next_idx = max index + 1 (robuste aux trous)."""
@@ -96,7 +108,9 @@ class Panel:
 
         # Vitesses editables (appliquees a l'episode suivant)
         ttk.Label(top, text="Vitesse libre (--vel) :").grid(row=1, column=0, sticky="w", **pad)
-        self.vel = tk.StringVar(value="0.5")
+        # 0.3 -> 0.4 (demande Sam 2026-09-07 : transits trop lents). On reste SOUS 0.5,
+        # qui provoquait un overrun RT (BUG-006) et donc une desync de la boucle ouverte.
+        self.vel = tk.StringVar(value="0.4")
         ttk.Entry(top, textvariable=self.vel, width=7).grid(row=1, column=1, sticky="w", **pad)
         ttk.Label(top, text="Ligne droite (--cart-speed m/s) :").grid(row=1, column=2, sticky="w", **pad)
         self.cart = tk.StringVar(value="0.04")
@@ -132,6 +146,13 @@ class Panel:
         self.b_stop = tk.Button(btns, text="⏹ STOP", bg="#6c757d", fg="white",
                                 font=("TkDefaultFont", 12, "bold"), width=10, command=self.on_stop)
         self.b_stop.grid(row=0, column=4, padx=4)
+        # Changeur d'outil (verrou tete) : publie /head_lock. Utilisables a tout moment.
+        self.b_lock = tk.Button(btns, text="🔒 Verrouiller", bg="#6f42c1", fg="white",
+                                font=("TkDefaultFont", 11, "bold"), width=13, command=self.on_lock)
+        self.b_lock.grid(row=1, column=0, padx=4, pady=(6, 0))
+        self.b_unlock = tk.Button(btns, text="🔓 Déverrouiller", bg="#fd7e14", fg="white",
+                                  font=("TkDefaultFont", 11, "bold"), width=13, command=self.on_unlock)
+        self.b_unlock.grid(row=1, column=1, padx=4, pady=(6, 0))
 
         # Log
         ttk.Label(top, text="Journal :").grid(row=5, column=0, sticky="w", **pad)
@@ -177,9 +198,11 @@ class Panel:
     def _run_oracle(self, vel, cart):
         """Thread : lance l'oracle 1 episode vers la zone de transit, remonte le resultat."""
         env = dict(os.environ)
-        env["ROBY_CAMS"] = "both"
+        env.setdefault("ROBY_CAMS", "both")   # respecte ROBY_CAMS=left (mono) s'il est fourni
         cmd = ["bash", ORACLE_SH, "--episodes", "1", "--out", STAGING,
                "--vel", str(vel), "--cart-speed", str(cart)]
+        if RECOVERY:
+            cmd.append("--recovery")          # scenario rattrapage (batch_recovery_* dedie)
         batch_path = None
         ok = False
         try:
@@ -260,8 +283,7 @@ class Panel:
             if self.stopping:
                 self._go_idle("Arrêté.")
             else:
-                self.status.set("↻ Épisode raté — relance automatique…")
-                self.root.after(800, self._start_episode)
+                self._go_idle("Épisode raté et jeté — clique ▶ DÉMARRER pour réessayer.")
             return
         # episode pret : attente decision
         self.state = "review"
@@ -291,8 +313,7 @@ class Panel:
             if self.stopping:
                 self._go_idle("Arrêté.")
             else:
-                self.status.set("↻ Rangement échoué — relance automatique…")
-                self.root.after(800, self._start_episode)
+                self._go_idle("Rangement échoué — clique ▶ DÉMARRER pour réessayer.")
             return
         self.next_idx += 1
         self.kept += 1
@@ -328,13 +349,16 @@ class Panel:
                 pass
 
     def _next_or_stop(self):
+        # PLUS DE RELANCE AUTOMATIQUE (demande Sam 2026-09-07) : on repasse en idle et on
+        # attend un clic explicite sur DÉMARRER. Avant, GARDER/JETER relancait le bras tout
+        # seul -- l'operateur pouvait avoir les mains dans la zone en triant l'episode.
         self._stop_video()
         self._set_buttons(False, False, False, False)
         if self.stopping:
             self._go_idle(f"Arrêté. Session : {self.kept} gardés dans {os.path.basename(self.session_dir)}")
         else:
-            self.status.set("↻ Relance automatique de l'épisode suivant…")
-            self.root.after(600, self._start_episode)
+            self._go_idle(f"En attente — clique ▶ DÉMARRER pour l'épisode suivant "
+                          f"(ep_{self.next_idx:03d}).")
 
     def on_stop(self):
         self.stopping = True
@@ -351,6 +375,29 @@ class Panel:
         self.status.set(msg)
         self.status_lbl.configure(fg="#198754")
         self._set_buttons(True, False, False, False)
+
+    # ------------------------------------------------- changeur d'outil (head_lock)
+    def _head_lock(self, lock):
+        """Publie /head_lock (true=VERROU 50deg / false=DEVERROU 75deg) en tache de fond
+        (ne bloque pas l'UI). Le RobySystem de la stack est l'unique abonne du topic."""
+        data = "true" if lock else "false"
+        etat = "VERROUILLE (50deg)" if lock else "DEVERROUILLE (75deg)"
+        def worker():
+            try:
+                subprocess.run(["ros2", "topic", "pub", "--once", "/head_lock",
+                                "std_msgs/msg/Bool", f"{{data: {data}}}"],
+                               env=dict(os.environ), timeout=10,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.q.put(("log", f"  [changeur] -> {etat}"))
+            except Exception as e:  # noqa
+                self.q.put(("log", f"  [changeur] echec: {e}"))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_lock(self):
+        self._head_lock(True)
+
+    def on_unlock(self):
+        self._head_lock(False)
 
     # ------------------------------------------------------------- video
     def on_video(self):

@@ -1,4 +1,10 @@
-"""Full robot launch: ros2_control (real hardware) + MoveIt move_group.
+"""OBSOLETE depuis l'architecture B (2026-09) -- NE PAS UTILISER. Utiliser
+robot_control.launch.py sur le Pi5 et pc_moveit.launch.py sur le PC (skill
+/roby-lancer-bras). Ce launch demarre un move_group sur le Pi5 : un second
+robot_description / une config MoveIt perimee y provoquent la course « mock ».
+Conserve pour l'historique.
+
+Full robot launch: ros2_control (real hardware) + MoveIt move_group.
 
 Run on Pi5:
     export ROS_DOMAIN_ID=42
@@ -8,6 +14,7 @@ The PC runs RViz separately for visualization:
     ros2 launch neuroneimitationcarote_moveit_config moveit_only.launch.py
 """
 
+import os
 from moveit_configs_utils import MoveItConfigsBuilder
 from moveit_configs_utils.launches import generate_move_group_launch
 
@@ -20,6 +27,13 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    # Refus du domaine 42 (2026-09-13, spec-point-entree-unique-lancement) : ce lancement
+    # architecture A, perimee (move_group sur le Pi5, course au mock) ; a cote du vrai bras, c'est la course au mock (steppers morts, BUG-008).
+    if os.environ.get("ROS_DOMAIN_ID") == "42":
+        raise RuntimeError(
+            "robot_full.launch.py refuse sur le domaine 42 (vrai robot) : il architecture A, perimee (move_group sur le Pi5, course au mock). "
+            "Vrai robot : `roby up --nid-confirme` ; simulation : `roby up --sim`."
+        )
     roby_hw_share = FindPackageShare("roby_hardware")
 
     # URDF with steppers_only hardware config (joints 1-3 real, 4-5 mock)

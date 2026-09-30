@@ -2,9 +2,15 @@
 # le 2026-07-15 puis nettoyee (28657 echantillons -> 5 waypoints monotones, creux j3 retire).
 # Rejouable via ~/roby_sortie_nid.sh (FollowJointTrajectory vers /arm_controller).
 # Ordre joints : [joint_1, joint_2, joint_3, joint_4, joint_5] en radians.
+#
+# ⚠️ RE-ETIQUETAGE DU NID, 2026-09-20 : les 5 waypoints ont ete decales en bloc de
+#   [-0.00250, +0.01710, +0.13683, -0.00249, -0.15390] rad
+# pour suivre la nouvelle pose du nid (initial_positions.yaml). Le CHEMIN PHYSIQUE est
+# inchange : seul l'etiquetage des angles change. Sauvegarde d'avant :
+# ~/roby_sortie_nid.yaml.AVANT_nid_20260920
 waypoints:
-  - [1.56267, 1.00824, 0.39232, 0.00000, 0.22510]   # nid (depart)
-  - [1.56267, 0.97344, 0.43677, 0.00000, 0.22510]   # j3 se leve un peu (degage le nid)
-  - [1.56267, 0.92976, 0.44471, 0.00000, 0.22510]
-  - [1.56267, 0.52412, 0.44471, 0.00000, 0.22510]   # j2 descend
-  - [0.69198, 0.52378, 0.44471, 0.00000, 0.22510]   # j1 pivote -> sortie
+  - [1.56017, 0.93494, 0.58885, -0.00249, 0.04700]   # nid (depart)
+  - [1.56017, 0.90014, 0.63330, -0.00249, 0.04700]   # j3 se leve un peu (degage le nid)
+  - [1.56017, 0.85646, 0.64124, -0.00249, 0.04700]
+  - [1.56017, 0.45082, 0.64124, -0.00249, 0.04700]   # j2 descend
+  - [0.68948, 0.45048, 0.64124, -0.00249, 0.04700]   # j1 pivote -> sortie

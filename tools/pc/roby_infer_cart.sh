@@ -33,4 +33,4 @@ export CYCLONEDDS_URI="file://$HOME/cyclone_config.xml"
 export OMP_NUM_THREADS=6
 
 cd "$LEROBOT"
-exec taskset -c 0-11 "$VENV" "$HOME/roby_infer_cart.py" --model "$MODEL_DEFAULT" "$@"
+exec taskset -c 0-11 "$VENV" "$(dirname "$(readlink -f "$0")")/roby_infer_cart.py" --model "$MODEL_DEFAULT" "$@"

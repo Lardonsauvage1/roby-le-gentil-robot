@@ -10,12 +10,30 @@ Usage : roby_replay_cartesian.py <bag_cartesien> [--rate 20] [--lead-in 4] [--go
   sans --go = DRY (reconstruit + verifie + affiche, NE BOUGE PAS).
 """
 import argparse, os, sys, time
-sys.path.insert(0, os.path.expanduser("~"))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # voisins de CE fichier, pas ceux du home
 import numpy as np
 from roby_oracle import fkT, D_JOINTS
 from roby_tool_pickup import dls, rotvec
 
+# --- Compensation joint_3 a l'ENVOI (2026-09-07) -----------------------------
+# Les bags *_cart contiennent un /tcp_pose DE-COMPENSE (espace modele, cf.
+# roby_dataset_to_cartesian --j3-scale). Le DLS rend donc des joints en espace
+# modele, alors que le robot attend des consignes COMPENSEES. Sans cette etape le
+# rejeu serait decale de 2 a 3 cm et on conclurait a tort a une erreur de conversion.
+# Meme convention que roby_tool_pickup._compense : opt-in par ROBY_J3_SCALE.
+J3_SCALE = float(os.environ.get("ROBY_J3_SCALE", "0") or 0)
+J3_REF = float(os.environ.get("ROBY_J3_REF", "0.5237"))
+
+
+def compense(j):
+    if J3_SCALE <= 0:
+        return list(j)
+    out = list(j)
+    out[2] = J3_REF + (out[2] - J3_REF) / J3_SCALE
+    return out
+
 import rclpy
+import roby_gates
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from builtin_interfaces.msg import Duration
@@ -82,11 +100,11 @@ def reconstruct(tcp_pts):
 
 def build_traj(points, lead_in):
     traj = JointTrajectory(); traj.joint_names = list(JOINTS)
-    p0 = JointTrajectoryPoint(); p0.positions = [float(v) for v in points[0][1]]
+    p0 = JointTrajectoryPoint(); p0.positions = [float(v) for v in compense(points[0][1])]
     p0.time_from_start = Duration(sec=int(lead_in), nanosec=int((lead_in % 1) * 1e9))
     traj.points.append(p0)
     for (t, pos) in points[1:]:
-        pt = JointTrajectoryPoint(); pt.positions = [float(v) for v in pos]
+        pt = JointTrajectoryPoint(); pt.positions = [float(v) for v in compense(pos)]
         tt = lead_in + t
         pt.time_from_start = Duration(sec=int(tt), nanosec=int((tt % 1) * 1e9))
         traj.points.append(pt)
@@ -121,6 +139,7 @@ def main():
         print("DRY : rien envoye. Ajoute --go pour bouger (bras + pince)."); return 0
 
     rclpy.init(); node = Node("roby_replay_cart")
+    roby_gates.exiger(node, "roby_replay_cartesian")  # lecture seule ; quitte si la stack est incoherente
     ac = ActionClient(node, FollowJointTrajectory, "/arm_controller/follow_joint_trajectory")
     grip_pub = node.create_publisher(Bool, "/gripper", 10)
     if not ac.wait_for_server(timeout_sec=10):
