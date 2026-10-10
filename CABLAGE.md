@@ -57,7 +57,7 @@ Réveil manuel des sorties : `tools/pi5/pca_wake.sh`.
 
 | Périphérique | Lien udev | Détail | Code |
 |---|---|---|---|
-| Carte poignet BLDC axe 5 (`wrist:=bldc`) — B-G431B-ESC1, ST-LINK VID `0483` | `/dev/roby_wrist` | 115200 bauds, LA8308 KV90 + réducteur planétaire 9:1, AS5600, alim 12 V | `src/roby_wrist_bldc/` (règle `udev/99-roby-wrist.rules`), firmware `firmware/wrist_bldc_simplefoc/` |
+| Carte poignet BLDC axe 5 (`wrist:=bldc`) — B-G431B-ESC1, ST-LINK VID `0483` | `/dev/roby_wrist` | 115200 bauds, LA8308 KV90 + réducteur planétaire 9:1, AS5600, alim 12 V | `src/roby_wrist_bldc/` (règle `udev/99-roby-wrist.rules`), firmware dans NIC_forge `software/control/firmware/wrist_bldc_simplefoc/` |
 
 Sans la règle udev la carte apparaît en `/dev/ttyACM*` ; `roby_wrist_bldc/ports.py` la
 retrouve alors par son VID.
